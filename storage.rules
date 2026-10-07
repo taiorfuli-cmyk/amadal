@@ -1,0 +1,76 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // Helper functions
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.admin == true ||
+        request.auth.token.email.lower() == "taior.fuli@gmail.com" ||
+        request.auth.token.email == "taior.fuli@gmail.com"
+      );
+    }
+
+    // Helper to validate image upload (JPG, PNG, WEBP, max 15MB)
+    function isValidImage() {
+      return request.resource != null &&
+        request.resource.size <= 15 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/(jpeg|jpg|png|webp)');
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 1. Product Images
+    // Public read. Admin-only upload, update, and delete.
+    // ─────────────────────────────────────────────────────────────
+    match /products/{productId}/{allImages=**} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidImage();
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 2. Category Images
+    // Public read. Admin-only upload, update, and delete.
+    // ─────────────────────────────────────────────────────────────
+    match /categories/{categoryId}/{allImages=**} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidImage();
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 3. Homepage Banners & Content Images
+    // Public read. Admin-only upload, update, and delete.
+    // ─────────────────────────────────────────────────────────────
+    match /homepage/{allImages=**} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidImage();
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 4. Store Settings Images (Logo, Favicon, etc.)
+    // Public read. Admin-only upload, update, and delete.
+    // ─────────────────────────────────────────────────────────────
+    match /store-settings/{allImages=**} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidImage();
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 5. General Fallback Match
+    // Public read. Admin-only write & delete.
+    // ─────────────────────────────────────────────────────────────
+    match /{allImages=**} {
+      allow read: if true;
+      allow write: if isAdmin() && isValidImage();
+      allow delete: if isAdmin();
+    }
+  }
+}
+

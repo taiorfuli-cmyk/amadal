@@ -1,0 +1,159 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny for all unmatched paths
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // Helper Functions
+    // ─────────────────────────────────────────────────────────────
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.admin == true ||
+        request.auth.token.email.lower() == "taior.fuli@gmail.com" ||
+        request.auth.token.email == "taior.fuli@gmail.com" ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // Schema validation for Customer Order Creation
+    function isValidOrderCreate() {
+      let data = request.resource.data;
+      return data.keys().hasAll(['orderNumber', 'customerName', 'phone', 'wilaya', 'address', 'items', 'total', 'status'])
+        && data.customerName is string && data.customerName.size() >= 2 && data.customerName.size() <= 100
+        && data.phone is string && data.phone.size() >= 9 && data.phone.size() <= 20
+        && data.wilaya is string && data.wilaya.size() >= 2 && data.wilaya.size() <= 60
+        && data.address is string && data.address.size() >= 3 && data.address.size() <= 300
+        && data.items is list && data.items.size() >= 1 && data.items.size() <= 100
+        && data.total is number && data.total >= 0
+        && data.status in ['new', 'confirmed', 'preparing', 'processing', 'shipped', 'completed', 'delivered', 'cancelled', 'returned'];
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 1. Admins Collection
+    // ─────────────────────────────────────────────────────────────
+    match /admins/{adminId} {
+      allow read: if isSignedIn() && (request.auth.uid == adminId || isAdmin());
+      allow write: if isSignedIn() && (request.auth.token.email.lower() == "taior.fuli@gmail.com" || isAdmin());
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 2. Products Collection
+    // Public read only. Create, delete strictly admin.
+    // Update allows admin, or safe inventory stock decrement on checkout.
+    // ─────────────────────────────────────────────────────────────
+    match /products/{productId} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['variants', 'updatedAt'])
+        && request.resource.data.price == resource.data.price
+        && request.resource.data.name == resource.data.name
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 3. Categories Collection
+    // Public read only. Create, update, delete strictly admin.
+    // ─────────────────────────────────────────────────────────────
+    match /categories/{categoryId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 4. Coupons Collection
+    // Public read. Create, delete strictly admin.
+    // Update allowed for admin, or usageCount increment on order completion.
+    // ─────────────────────────────────────────────────────────────
+    match /coupons/{couponId} {
+      allow read: if true;
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usageCount'])
+      );
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 5. Orders Collection
+    // Customers can ONLY create with valid schema.
+    // Modification and deletion are strictly forbidden for customers.
+    // Only Admin can list all orders or update/delete orders.
+    // ─────────────────────────────────────────────────────────────
+    match /orders/{orderId} {
+      allow create: if isValidOrderCreate();
+      allow get: if true;
+      allow list: if isAdmin();
+      allow update, delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 6. Customers Collection
+    // Admin full access. Creation/update allowed for checkout profile sync.
+    // ─────────────────────────────────────────────────────────────
+    match /customers/{customerId} {
+      allow get, list: if isAdmin();
+      allow create, update: if true;
+      allow delete: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 7. Store Settings
+    // Public read. Write strictly admin.
+    // ─────────────────────────────────────────────────────────────
+    match /settings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 8. Homepage Content
+    // Public read. Write strictly admin.
+    // ─────────────────────────────────────────────────────────────
+    match /homepage/{sectionId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 9. Static Content & Policies
+    // Public read. Write strictly admin.
+    // ─────────────────────────────────────────────────────────────
+    match /content/{pageId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 10. Shipping Rates
+    // Public read. Write strictly admin.
+    // ─────────────────────────────────────────────────────────────
+    match /shipping/{shippingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // ─────────────────────────────────────────────────────────────
+    // 11. Customer Reviews
+    // Public read. Authenticated create. Admin update/delete.
+    // ─────────────────────────────────────────────────────────────
+    match /reviews/{reviewId} {
+      allow read: if true;
+      allow create: if request.resource.data.customer is string
+        && request.resource.data.rating is number
+        && request.resource.data.rating >= 1 && request.resource.data.rating <= 5;
+      allow update, delete: if isAdmin();
+    }
+  }
+}

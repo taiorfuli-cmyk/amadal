@@ -1,0 +1,6 @@
+{
+  "name": "AMADAL | متجر الأزياء العصرية",
+  "description": "متجر AMADAL الرسمي للأزياء العصرية والملابس الشبابية الفاخرة في الجزائر.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

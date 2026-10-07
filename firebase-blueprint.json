@@ -1,0 +1,175 @@
+{
+  "entities": {
+    "Product": {
+      "title": "Product",
+      "description": "AMADAL clothing product with variants and inventory",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Product title" },
+        "slug": { "type": "string", "description": "URL slug" },
+        "description": { "type": "string", "description": "Product details" },
+        "price": { "type": "number", "description": "Original price in DZD" },
+        "salePrice": { "type": "number", "description": "Discounted price in DZD" },
+        "categoryId": { "type": "string", "description": "Category reference" },
+        "images": { "type": "array", "description": "Product images URLs" },
+        "colors": { "type": "array", "description": "Available color names" },
+        "sizes": { "type": "array", "description": "Available sizes" },
+        "variants": { "type": "array", "description": "Stock per color and size combination" },
+        "sku": { "type": "string", "description": "Stock keeping unit" },
+        "fit": { "type": "string", "description": "Cut or fit style e.g. Oversized, Regular, Boxy" },
+        "fabric": { "type": "string", "description": "Material composition" },
+        "careInstructions": { "type": "string", "description": "Washing and care instructions" },
+        "sizeGuide": { "type": "array", "description": "Size measurements guide table" },
+        "isFeatured": { "type": "boolean", "description": "Shown in featured section" },
+        "isNew": { "type": "boolean", "description": "Tagged as new arrival" },
+        "isBestSeller": { "type": "boolean", "description": "Tagged as best seller" },
+        "isPublished": { "type": "boolean", "description": "Visible in public catalog" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Update timestamp" }
+      },
+      "required": ["name", "price", "categoryId", "isPublished"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Product category",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string", "description": "Category name in Arabic/English" },
+        "nameEn": { "type": "string", "description": "Category name in English" },
+        "slug": { "type": "string", "description": "Category slug" },
+        "description": { "type": "string", "description": "Brief category summary" },
+        "imageUrl": { "type": "string", "description": "Banner or tile image" },
+        "order": { "type": "number", "description": "Display order" },
+        "isActive": { "type": "boolean", "description": "Active visibility" }
+      },
+      "required": ["name", "slug"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Customer purchase order for Algerian market",
+      "type": "object",
+      "properties": {
+        "orderNumber": { "type": "string", "description": "Human readable order code e.g. AMD-1029" },
+        "idempotencyKey": { "type": "string", "description": "Unique transaction idempotency key to prevent duplicate orders" },
+        "customerName": { "type": "string", "description": "Full customer name" },
+        "phone": { "type": "string", "description": "Customer phone number" },
+        "wilaya": { "type": "string", "description": "Algerian Wilaya" },
+        "commune": { "type": "string", "description": "Commune / Municipality" },
+        "address": { "type": "string", "description": "Street address" },
+        "notes": { "type": "string", "description": "Customer delivery notes" },
+        "items": { "type": "array", "description": "List of ordered products with variant info" },
+        "subtotal": { "type": "number", "description": "Subtotal amount in DZD" },
+        "shippingCost": { "type": "number", "description": "Shipping rate in DZD" },
+        "discount": { "type": "number", "description": "Applied discount" },
+        "total": { "type": "number", "description": "Total amount in DZD" },
+        "status": { "type": "string", "description": "AMADAL Order status e.g. new, confirmed, preparing, shipped, completed, cancelled, returned" },
+        "shippingStatus": { "type": "string", "description": "Delivery courier status e.g. not_sent, sending, created, at_hub, in_transit, at_delivery_hub, out_for_delivery, delivered, delivery_pending, returning, returned, failed" },
+        "shippingTrackingNumber": { "type": "string", "description": "Tracking code assigned by the delivery carrier" },
+        "shippingUpdatedAt": { "type": "string", "description": "Timestamp of the last status update from the delivery company" },
+        "deliveredAt": { "type": "string", "description": "Timestamp when the shipment reached delivered status" },
+        "isArchived": { "type": "boolean", "description": "Whether the order is currently archived" },
+        "archivedAt": { "type": "string", "description": "Timestamp when the order was archived" },
+        "andersonStatus": { "type": "string", "description": "Anderson delivery status: pending, sending, sent, failed" },
+        "andersonTrackingNumber": { "type": "string", "description": "Tracking number returned by Anderson Delivery API" },
+        "andersonError": { "type": "string", "description": "Detailed error message if Anderson API call failed" },
+        "andersonLastAttemptAt": { "type": "string", "description": "Timestamp of last transmission attempt to Anderson" },
+        "andersonAttempts": { "type": "number", "description": "Number of retry attempts to send order to Anderson" },
+        "createdAt": { "type": "string", "description": "Creation timestamp" },
+        "updatedAt": { "type": "string", "description": "Status update timestamp" }
+      },
+      "required": ["orderNumber", "customerName", "phone", "wilaya", "items", "total", "status"]
+    },
+    "AndersonSetting": {
+      "title": "AndersonSetting",
+      "description": "Anderson Delivery EcoTrack API integration settings and credentials",
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean", "description": "Whether automated Anderson delivery is active" },
+        "apiToken": { "type": "string", "description": "Anderson EcoTrack API Bearer Token" },
+        "apiBaseUrl": { "type": "string", "description": "Base URL of Anderson Delivery API" },
+        "autoSendOrders": { "type": "boolean", "description": "Automatically send orders upon successful customer checkout" },
+        "lastTestedAt": { "type": "string", "description": "Timestamp of last API connection test" },
+        "lastTestStatus": { "type": "string", "description": "Connection test status: success, failed, or untested" },
+        "lastTestMessage": { "type": "string", "description": "Result or error message from connection test" }
+      }
+    },
+    "Setting": {
+      "title": "Setting",
+      "description": "Store configuration and metadata",
+      "type": "object",
+      "properties": {
+        "storeName": { "type": "string", "description": "Brand name" },
+        "storeDescription": { "type": "string", "description": "Brand tagline" },
+        "logoUrl": { "type": "string", "description": "Official logo image URL" },
+        "faviconUrl": { "type": "string", "description": "Favicon URL" },
+        "whatsappNumber": { "type": "string", "description": "Official WhatsApp phone number" },
+        "whatsappMessageTemplate": { "type": "string", "description": "Template message for WhatsApp orders" },
+        "phone": { "type": "string", "description": "Customer service phone" },
+        "email": { "type": "string", "description": "Customer service email" },
+        "instagram": { "type": "string", "description": "Instagram link" },
+        "tiktok": { "type": "string", "description": "TikTok link" },
+        "facebook": { "type": "string", "description": "Facebook link" },
+        "currency": { "type": "string", "description": "DZD currency label" },
+        "lowStockThreshold": { "type": "number", "description": "Low stock warning threshold" },
+        "orderArchiveDurationHours": { "type": "number", "description": "Hours after delivery before an order is auto-archived (e.g. 48)" }
+      }
+    },
+    "ShippingRate": {
+      "title": "ShippingRate",
+      "description": "Wilaya shipping fees and delivery estimates",
+      "type": "object",
+      "properties": {
+        "wilayaCode": { "type": "string", "description": "Wilaya number 1 to 69" },
+        "wilayaName": { "type": "string", "description": "Wilaya Arabic name" },
+        "homePrice": { "type": "number", "description": "Delivery to home fee in DZD" },
+        "deskPrice": { "type": "number", "description": "Stop desk / pickup fee in DZD" },
+        "estimatedDays": { "type": "string", "description": "Estimated delivery time e.g. 24-48h" },
+        "isActive": { "type": "boolean", "description": "Active shipping destination" },
+        "isDeskAvailable": { "type": "boolean", "description": "Whether stop desk pickup is available in this wilaya" }
+      },
+      "required": ["wilayaCode", "wilayaName", "homePrice"]
+    },
+    "Coupon": {
+      "title": "Coupon",
+      "description": "Discount vouchers",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string", "description": "Coupon promo code" },
+        "discountType": { "type": "string", "description": "percentage or fixed" },
+        "discountValue": { "type": "number", "description": "Discount rate or amount" },
+        "minOrder": { "type": "number", "description": "Minimum cart value required" },
+        "usageLimit": { "type": "number", "description": "Max usage times" },
+        "usageCount": { "type": "number", "description": "Current times used" },
+        "expiresAt": { "type": "string", "description": "Expiration date" },
+        "isActive": { "type": "boolean", "description": "Active status" }
+      },
+      "required": ["code", "discountType", "discountValue", "isActive"]
+    }
+  },
+  "firestore": {
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Public clothing catalog managed by admin"
+    },
+    "/categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Store categories"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Customer purchase orders"
+    },
+    "/settings/{settingId}": {
+      "schema": "Setting",
+      "description": "Storewide settings and configuration"
+    },
+    "/shipping/{shippingId}": {
+      "schema": "ShippingRate",
+      "description": "Shipping costs per Wilaya"
+    },
+    "/coupons/{couponId}": {
+      "schema": "Coupon",
+      "description": "Promo and discount coupons"
+    }
+  }
+}
