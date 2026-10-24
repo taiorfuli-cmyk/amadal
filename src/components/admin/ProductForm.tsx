@@ -69,6 +69,136 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   const images = normalizeProductImages(product.images);
 
   /**
+   * Fallback native HTML5 canvas compression for mobile devices (iOS Safari / Android)
+   * in case browser-image-compression worker or method times out or encounters format issues.
+   */
+  const fallbackCanvasWebP = async (
+    file: File,
+    maxWidth = 1920,
+    quality = 0.82,
+    onProgress?: (pct: number) => void
+  ): Promise<File> => {
+    onProgress?.(25);
+    return new Promise<File>((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('CANVAS_TIMEOUT'));
+      }, 12000);
+
+      const img = new Image();
+      const objectUrl = URL.createObjectURL(file);
+
+      img.onload = () => {
+        onProgress?.(50);
+        try {
+          let width = img.width;
+          let height = img.height;
+
+          if (width > maxWidth || height > maxWidth) {
+            if (width > height) {
+              height = Math.round((height * maxWidth) / width);
+              width = maxWidth;
+            } else {
+              width = Math.round((width * maxWidth) / height);
+              height = maxWidth;
+            }
+          }
+
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, width);
+          canvas.height = Math.max(1, height);
+          const ctx = canvas.getContext('2d');
+          if (!ctx) {
+            clearTimeout(timeout);
+            URL.revokeObjectURL(objectUrl);
+            return resolve(file);
+          }
+
+          ctx.drawImage(img, 0, 0, width, height);
+          onProgress?.(80);
+
+          canvas.toBlob(
+            (blob) => {
+              clearTimeout(timeout);
+              URL.revokeObjectURL(objectUrl);
+              if (!blob) {
+                return resolve(file);
+              }
+              const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || 'product_img';
+              const cleanName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 35) || 'img';
+              const webpFile = new File([blob], `${cleanName}.webp`, {
+                type: 'image/webp',
+                lastModified: Date.now(),
+              });
+              onProgress?.(100);
+              resolve(webpFile);
+            },
+            'image/webp',
+            quality
+          );
+        } catch (e) {
+          clearTimeout(timeout);
+          URL.revokeObjectURL(objectUrl);
+          resolve(file);
+        }
+      };
+
+      img.onerror = () => {
+        clearTimeout(timeout);
+        URL.revokeObjectURL(objectUrl);
+        reject(new Error('تعذر قراءة صورة الهاتف المحددة.'));
+      };
+
+      img.src = objectUrl;
+    });
+  };
+
+  /**
+   * Compress image to strictly under 1MB and convert to .webp using browser-image-compression
+   * with watchdog timeout and canvas fallback to prevent 0% freezes on smartphones.
+   */
+  const compressImageForProduct = async (
+    file: File,
+    onProgress?: (percent: number) => void
+  ): Promise<File> => {
+    // If already a WebP image and strictly under 1MB, skip recompression
+    if (file && file.type === 'image/webp' && file.size < 1024 * 1024) {
+      onProgress?.(100);
+      return file;
+    }
+
+    const options = {
+      maxSizeMB: 0.9, // Strictly < 1MB
+      maxWidthOrHeight: 1920,
+      useWebWorker: false, // Prevents stalling on iOS Safari & Android mobile WebViews
+      fileType: 'image/webp',
+      initialQuality: 0.85,
+      onProgress: (p: number) => {
+        const clamped = Math.min(100, Math.max(0, Math.round(p)));
+        onProgress?.(clamped);
+      },
+    };
+
+    // 15-second watchdog timer on compression to prevent freezing
+    const compressionPromise = imageCompression(file, options);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('COMPRESSION_TIMEOUT')), 15000)
+    );
+
+    try {
+      const compressedBlob = await Promise.race([compressionPromise, timeoutPromise]);
+      const baseName = file.name.substring(0, file.name.lastIndexOf('.')) || 'product_img';
+      const cleanName = baseName.replace(/[^a-zA-Z0-9_-]/g, '_').substring(0, 35) || 'img';
+      return new File([compressedBlob], `${cleanName}.webp`, {
+        type: 'image/webp',
+        lastModified: Date.now(),
+      });
+    } catch (err: any) {
+      console.warn('[ProductForm] browser-image-compression note or timeout, falling back to native Canvas WebP:', err);
+      return await fallbackCanvasWebP(file, 1920, 0.82, onProgress);
+    }
+  };
+
+  /**
    * Compress and upload selected image files with retry, timeout, and Arabic error handling
    */
   const handleFilesSelected = async (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -96,7 +226,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
     }
 
     setIsUploading(true);
-    setUploadProgress(0);
+    setUploadProgress(1);
 
     const uploadedList: ProductImage[] = [];
     const totalFiles = fileArray.length;
@@ -115,22 +245,17 @@ export const ProductForm: React.FC<ProductFormProps> = ({
         // ─────────────────────────────────────────────────────────────
         setActiveStepText(
           totalFiles > 1
-            ? `جاري ضغط وتحويل الصورة (${i + 1}/${totalFiles}) إلى صيغة WebP...`
-            : 'جاري ضغط الصورة وتحويلها إلى صيغة WebP بأعلى دقة...'
+            ? `جاري فحص وضغط الصورة (${i + 1}/${totalFiles}) لأقل من 1MB بصيغة WebP...`
+            : 'جاري ضغط الصورة وتقليص حجمها لأقل من 1MB بصيغة WebP...'
         );
 
         let preparedFile: File;
         try {
-          preparedFile = await compressAndConvertToWebP(originalFile, {
-            maxSizeMB: 0.95, // Strictly < 1MB
-            maxWidthOrHeight: 1920,
-            initialQuality: 0.85,
-            onProgress: (p) => {
-              // Compression occupies 0% - 30% of this file's progress chunk
-              const currentChunk = (p / 100) * 30;
-              const currentTotal = Math.round(fileBaseProgress + currentChunk / totalFiles);
-              setUploadProgress(Math.min(99, Math.max(1, currentTotal)));
-            },
+          preparedFile = await compressImageForProduct(originalFile, (p) => {
+            // Compression occupies 0% - 35% of this file's progress chunk
+            const currentChunk = (p / 100) * 35;
+            const currentTotal = Math.round(fileBaseProgress + currentChunk / totalFiles);
+            setUploadProgress(Math.min(99, Math.max(1, currentTotal)));
           });
         } catch (compErr: any) {
           console.warn('[ProductForm Compression Notice]:', compErr);
@@ -140,7 +265,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
         totalCompressedBytes += preparedFile.size;
 
         // ─────────────────────────────────────────────────────────────
-        // 2. Upload to Firebase Storage with Timeout & Auto-Retry
+        // 2. Upload to Firebase Storage with Timeout Watchdog & Auto-Retry
         // ─────────────────────────────────────────────────────────────
         setActiveStepText(
           totalFiles > 1
@@ -159,8 +284,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({
             }
 
             const result = await uploadProductImage(targetProductId, preparedFile, (filePct) => {
-              // Upload occupies 30% - 100% of this file's progress chunk
-              const currentChunk = 30 + (filePct / 100) * 70;
+              // Upload occupies 35% - 100% of this file's progress chunk
+              const currentChunk = 35 + (filePct / 100) * 65;
               const currentTotal = Math.round(fileBaseProgress + currentChunk / totalFiles);
               setUploadProgress(Math.min(99, Math.max(1, currentTotal)));
             });
@@ -183,7 +308,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
             lastError = err;
             console.warn(`Upload attempt ${attempt} failed:`, err);
             if (attempt < maxRetries) {
-              // Wait with exponential backoff before retry
+              // Wait with exponential backoff before retry (1.2s, 2.4s)
               await new Promise((res) => setTimeout(res, 1200 * attempt));
             }
           }
@@ -223,7 +348,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
       }
 
       setUploadProgress(100);
-      setActiveStepText('تم رفع جميع الصور بنجاح!');
+      setActiveStepText(`تم رفع جميع الصور (${totalFiles}) بنجاح!`);
     } catch (err: any) {
       console.error('[ProductForm Upload Error]:', err);
       const arabicMsg = translateStorageErrorToArabic(err);

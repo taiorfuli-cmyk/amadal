@@ -22,6 +22,7 @@ import {
   validateImageFile,
   isFirebaseStorageUrl,
   fileToBase64,
+  compressAndConvertToWebP,
   translateStorageErrorToArabic
 } from '../../../services/storageService';
 
@@ -107,12 +108,12 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
     setIsEditing(true);
   };
 
-  // Handle selecting an image from mobile gallery / files
+  // Handle selecting an image from mobile gallery / files: upload immediately while file reference is active!
   const handleImageFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // 1. Validate file type & size (JPG, JPEG, PNG, WEBP up to 10MB)
+    // 1. Validate file type & size (JPG, JPEG, PNG, WEBP up to 15MB)
     const validation = validateImageFile(file);
     if (!validation.valid) {
       setUploadStatus('error');
@@ -123,22 +124,72 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
       return;
     }
 
-    // 2. Revoke any existing object URL
+    // 2. Revoke any existing object URL & show local preview immediately
     if (imagePreviewUrl && imagePreviewUrl.startsWith('blob:')) {
       URL.revokeObjectURL(imagePreviewUrl);
     }
 
-    setSelectedImageFile(file);
-    setUploadStatus('idle');
-    setUploadError(null);
-    setUploadProgress(0);
-
-    // Create fast, zero-memory object URL for immediate UI preview
     try {
       const localBlobUrl = URL.createObjectURL(file);
       setImagePreviewUrl(localBlobUrl);
-    } catch (err) {
-      console.warn('[Image Selection Notice]: Object URL creation notice:', err);
+    } catch {}
+
+    setUploadStatus('uploading');
+    setUploadError(null);
+    setUploadProgress(10);
+
+    const targetCategoryId =
+      editingCat?.id && !editingCat.id.startsWith('cat_')
+        ? editingCat.id
+        : editingCat?.slug?.trim() || `cat_${Date.now()}`;
+
+    try {
+      // 3. Compress immediately using browser-image-compression (< 1MB, WebP)
+      setUploadProgress(25);
+      let preparedFile: File;
+      try {
+        preparedFile = await compressAndConvertToWebP(file, {
+          maxSizeMB: 0.9,
+          maxWidthOrHeight: 1200,
+          initialQuality: 0.85,
+          onProgress: (p) => setUploadProgress(25 + Math.round((p / 100) * 20)),
+        });
+      } catch (cErr) {
+        console.warn('[Category Image Compression Notice]:', cErr);
+        preparedFile = file;
+      }
+
+      setUploadProgress(45);
+
+      // 4. Upload immediately to storage while file reference is freshly granted
+      const uploadResult = await uploadCategoryImage(
+        targetCategoryId,
+        preparedFile,
+        (p) => setUploadProgress(45 + Math.round((p / 100) * 55))
+      );
+
+      if (!uploadResult || !uploadResult.url) {
+        throw new Error('لم يتم استلام رابط الصورة بعد الرفع.');
+      }
+
+      // Update state and category with the permanent uploaded image URL
+      setImagePreviewUrl(uploadResult.url);
+      setSelectedImageFile(null);
+      if (editingCat) {
+        setEditingCat((prev) => (prev ? { ...prev, imageUrl: uploadResult.url } : prev));
+      }
+
+      setUploadStatus('success');
+      setUploadProgress(100);
+    } catch (uploadErr: any) {
+      console.error('[Category Image Upload Error]:', uploadErr);
+      const errorDetail = translateStorageErrorToArabic(uploadErr);
+      setUploadStatus('error');
+      setUploadError(errorDetail);
+    } finally {
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
     }
   };
 
@@ -249,38 +300,34 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
     const targetCategoryId =
       editingCat.id && !editingCat.id.startsWith('cat_') ? editingCat.id : slug;
 
-    let finalImageUrl = editingCat.imageUrl || '';
+    if (uploadStatus === 'uploading') {
+      setUploadError('يرجى الانتظار حتى يكتمل رفع صورة الصنف الحالية.');
+      setIsSaving(false);
+      return;
+    }
 
-    // 1. If a new image was selected from device, upload it first to Firebase Storage!
-    if (selectedImageFile) {
-      setUploadStatus('uploading');
-      setUploadProgress(15);
+    let finalImageUrl = editingCat.imageUrl || '';
+    if (!imagePreviewUrl) {
+      finalImageUrl = '';
+    } else if (selectedImageFile) {
+      // Fallback in case immediate upload did not trigger
       try {
         const uploadResult = await uploadCategoryImage(
           targetCategoryId,
           selectedImageFile,
-          (pct) => setUploadProgress(pct)
+          (pct) => setUploadProgress(pct),
+          bufferedImageBase64 || undefined
         );
-
-        if (!uploadResult || !uploadResult.url) {
-          throw new Error('لم يتم استلام رابط التحميل للصورة بعد الرفع.');
+        if (uploadResult?.url) {
+          finalImageUrl = uploadResult.url;
         }
-
-        finalImageUrl = uploadResult.url;
-        setUploadStatus('success');
-        setUploadProgress(100);
       } catch (uploadErr: any) {
-        const errorDetail = translateStorageErrorToArabic(uploadErr);
-        console.error('[Category Image Upload Error]:', errorDetail);
-        setUploadStatus('error');
-        setUploadError(errorDetail);
-        setIsSaving(false);
-        // Do NOT proceed to Firestore or delete old image if upload failed!
-        return;
+        console.warn('[Category Image Fallback Upload Note]:', uploadErr);
+        // If image upload fails on fallback, proceed with existing URL if present
+        if (!finalImageUrl && imagePreviewUrl) {
+          finalImageUrl = imagePreviewUrl;
+        }
       }
-    } else if (!imagePreviewUrl) {
-      // User explicitly cleared the image
-      finalImageUrl = '';
     }
 
     // 2. Save category document with image URL in Firestore

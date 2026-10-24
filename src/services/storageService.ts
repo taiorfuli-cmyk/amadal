@@ -75,6 +75,12 @@ export async function compressAndConvertToWebP(
   file: File,
   options?: CompressionOptions
 ): Promise<File> {
+  // If file is already WebP and strictly under 1MB, avoid redundant processing
+  if (file && file.type === 'image/webp' && file.size < 1024 * 1024) {
+    options?.onProgress?.(100);
+    return file;
+  }
+
   const maxSizeMB = options?.maxSizeMB ?? 0.95; // Strictly under 1MB
   const maxWidthOrHeight = options?.maxWidthOrHeight ?? 1920;
   const initialQuality = options?.initialQuality ?? 0.85;
@@ -83,7 +89,7 @@ export async function compressAndConvertToWebP(
     const compressionConfig = {
       maxSizeMB,
       maxWidthOrHeight,
-      useWebWorker: true,
+      useWebWorker: false, // Worker can hang indefinitely on mobile Safari/Android iFrames
       fileType: 'image/webp',
       initialQuality,
       onProgress: options?.onProgress,
@@ -92,11 +98,11 @@ export async function compressAndConvertToWebP(
     let compressedBlob: File;
     try {
       compressedBlob = await imageCompression(file, compressionConfig);
-    } catch (workerErr) {
-      console.warn('[Image Compression] Worker failed, retrying on main thread:', workerErr);
+    } catch (err) {
+      console.warn('[Image Compression] Main thread attempt failed, trying with default worker setting:', err);
       compressedBlob = await imageCompression(file, {
         ...compressionConfig,
-        useWebWorker: false,
+        useWebWorker: true,
       });
     }
 
@@ -328,7 +334,7 @@ async function isBucketReady(): Promise<boolean> {
       return false;
     }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1000);
+    const timeout = setTimeout(() => controller.abort(), 3500);
     const res = await fetch(`https://firebasestorage.googleapis.com/v0/b/${bucket}/o?maxResults=1`, {
       method: 'GET',
       signal: controller.signal,
@@ -356,11 +362,24 @@ async function isBucketReady(): Promise<boolean> {
  * Supports folders: 'homepage', 'store-settings', 'products', etc.
  * Uses uploadBytesResumable, monitors state_changed, and ensures progress NEVER hangs.
  */
+export function dataUrlToFile(dataUrl: string, filename: string): File {
+  const parts = dataUrl.split(',');
+  const mime = parts[0].match(/:(.*?);/)?.[1] || 'image/webp';
+  const binaryStr = atob(parts[1] || '');
+  const len = binaryStr.length;
+  const u8arr = new Uint8Array(len);
+  for (let i = 0; i < len; i++) {
+    u8arr[i] = binaryStr.charCodeAt(i);
+  }
+  return new File([u8arr], filename, { type: mime, lastModified: Date.now() });
+}
+
 export interface UploadOptions {
-  folder: 'homepage' | 'store-settings' | 'products' | string;
+  folder: 'homepage' | 'store-settings' | 'products' | 'categories' | string;
   subfolder?: string;
   file: File;
   onProgress?: (progress: number) => void;
+  preloadedBase64?: string;
 }
 
 export async function uploadImageFile({
@@ -368,10 +387,15 @@ export async function uploadImageFile({
   subfolder,
   file,
   onProgress,
+  preloadedBase64,
 }: UploadOptions): Promise<UploadedImageResult> {
   // 1. Validate file
   if (!file || !(file instanceof File)) {
-    throw new Error('لم يتم استلام ملف صالح للرفع.');
+    if (preloadedBase64) {
+      file = dataUrlToFile(preloadedBase64, 'image.webp');
+    } else {
+      throw new Error('لم يتم استلام ملف صالح للرفع.');
+    }
   }
 
   const validation = validateImageFile(file);
@@ -394,6 +418,11 @@ export async function uploadImageFile({
     });
   } catch (compErr) {
     console.warn('[Storage] Compression fallback to original file:', compErr);
+    if (preloadedBase64 && (!processedFile || processedFile.size <= 0)) {
+      try {
+        processedFile = dataUrlToFile(preloadedBase64, 'image.webp');
+      } catch {}
+    }
   }
 
   // 3. Sanitize folder and generate collision-free, ASCII-safe storage path
@@ -417,7 +446,8 @@ export async function uploadImageFile({
         cleanSub.replace(/^\//, ''),
         uniqueFileName,
         processedFile,
-        (p) => onProgress?.(35 + Math.round((p / 100) * 65))
+        (p) => onProgress?.(35 + Math.round((p / 100) * 65)),
+        preloadedBase64
       );
       return serverResult;
     } catch (err) {
@@ -425,7 +455,7 @@ export async function uploadImageFile({
     }
 
     // Emergency local data URL fallback if server storage is unavailable
-    const originalDataUrl = await fileToBase64(processedFile);
+    const originalDataUrl = preloadedBase64 || (await fileToBase64(processedFile));
     onProgress?.(100);
     return {
       url: originalDataUrl,
@@ -433,12 +463,6 @@ export async function uploadImageFile({
       name: processedFile.name,
     };
   };
-
-  // Check if Firebase Storage bucket is ready
-  const isReady = await isBucketReady();
-  if (!isReady) {
-    return fallbackWithServerStorage();
-  }
 
   // 4. Multi-attempt Upload Loop (up to 3 retries with dynamic heartbeat timeout)
   const maxAttempts = 3;
@@ -549,9 +573,14 @@ export async function uploadImageFile({
  * 2. Direct ArrayBuffer conversion with blob.slice
  * 3. Offscreen Canvas decoding (bypasses OS file descriptor locks on Android/iOS/Chrome)
  */
-export async function fileToBase64(file: File): Promise<string> {
+export async function fileToBase64(file: File | any): Promise<string> {
   if (!file) {
     throw new Error('لم يتم تحديد ملف صالح لتحويله.');
+  }
+
+  // If already a Data URL string, return immediately
+  if (typeof file === 'string' && file.startsWith('data:')) {
+    return file;
   }
 
   // 1. Try FileReader with complete error protection
@@ -639,7 +668,7 @@ export async function fileToBase64(file: File): Promise<string> {
               img.src = objUrl;
             });
             return dataUrl;
-          } finally {
+          } catch {} finally {
             URL.revokeObjectURL(objUrl);
           }
         }
@@ -647,6 +676,16 @@ export async function fileToBase64(file: File): Promise<string> {
     }
   } catch (canvasErr) {
     console.warn('[Storage Service] Canvas image extraction notice:', canvasErr);
+  }
+
+  // 4. Object URL Fallback (100% resilient across mobile browsers)
+  if (typeof URL !== 'undefined' && typeof URL.createObjectURL === 'function') {
+    try {
+      const objUrl = URL.createObjectURL(file);
+      if (objUrl) {
+        return objUrl;
+      }
+    } catch {}
   }
 
   throw new Error('تعذر قراءة ملف الصورة من جهازك بسبب قيود أذونات الملف في المتصفح. يرجى إعادة اختيار الصورة مرة أخرى.');
@@ -759,6 +798,7 @@ export async function uploadCategoryImage(
     subfolder: categoryId.trim(),
     file,
     onProgress,
+    preloadedBase64,
   });
 }
 
@@ -768,7 +808,8 @@ export async function uploadCategoryImage(
 export async function uploadProductImage(
   productId: string,
   file: File,
-  onProgress?: (progress: number) => void
+  onProgress?: (progress: number) => void,
+  preloadedBase64?: string
 ): Promise<UploadedImageResult> {
   if (!productId || typeof productId !== 'string' || !productId.trim()) {
     throw new Error('معرف المنتج (productId) غير محدد أو غير صالح قبل إنشاء مسار Storage.');
@@ -778,6 +819,7 @@ export async function uploadProductImage(
     subfolder: productId.trim(),
     file,
     onProgress,
+    preloadedBase64,
   });
 }
 
