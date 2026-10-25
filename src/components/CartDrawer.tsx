@@ -2,6 +2,7 @@ import React from 'react';
 import { X, Trash2, Plus, Minus, ArrowLeft, ShoppingBag } from 'lucide-react';
 import { useCart } from '../context/CartContext';
 import { useStore } from '../context/StoreContext';
+import { handleImageError } from '../services/storageService';
 
 interface CartDrawerProps {
   onProceedToCheckout: () => void;
@@ -75,6 +76,8 @@ export const CartDrawer: React.FC<CartDrawerProps> = ({
                       src={item.image}
                       alt={item.productName}
                       className="w-full h-full object-contain object-center"
+                      loading="lazy"
+                      onError={handleImageError}
                     />
                   </div>
 

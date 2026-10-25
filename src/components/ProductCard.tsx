@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
 import { Product } from '../types';
 import { useStore } from '../context/StoreContext';
-import { Eye, ShoppingBag, Image as ImageIcon } from 'lucide-react';
-import { getMainImageUrl, getAllImageUrls } from '../services/storageService';
+import { Eye, Image as ImageIcon } from 'lucide-react';
+import { getMainImageUrl, getAllImageUrls, handleImageError } from '../services/storageService';
 
 interface ProductCardProps {
   product: Product;
@@ -47,6 +47,7 @@ export const ProductCard: React.FC<ProductCardProps> = ({
             className="w-full h-auto object-contain block transition-transform duration-500 ease-out group-hover:scale-105"
             style={{ width: '100%', height: 'auto', objectFit: 'contain' }}
             loading="lazy"
+            onError={handleImageError}
           />
         ) : (
           <div className="aspect-[4/3] w-full flex flex-col items-center justify-center bg-neutral-100 text-neutral-400 p-4">

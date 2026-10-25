@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Search, X, ArrowLeft, Tag, Image as ImageIcon } from 'lucide-react';
-import { Product } from '../types';
+import { Product, Category } from '../types';
 import { useStore } from '../context/StoreContext';
-import { getMainImageUrl } from '../services/storageService';
+import { getMainImageUrl, handleImageError } from '../services/storageService';
 
 interface SearchModalProps {
   isOpen: boolean;
@@ -90,7 +90,7 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                 التصنيفات الأكثر بحثاً
               </p>
               <div className="flex flex-wrap gap-2">
-                {categories.map((cat) => (
+                {categories.map((cat: Category) => (
                   <button
                     key={cat.id}
                     onClick={() => {
@@ -134,6 +134,8 @@ export const SearchModal: React.FC<SearchModalProps> = ({
                               src={getMainImageUrl(product.images)}
                               alt={product.name}
                               className="w-full h-full object-contain object-center"
+                              loading="lazy"
+                              onError={handleImageError}
                             />
                           </div>
                         ) : (

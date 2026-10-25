@@ -35,7 +35,9 @@ import {
   getMainImageUrl,
   getAllImageUrls,
   compressAndConvertToWebP,
-  translateStorageErrorToArabic
+  translateStorageErrorToArabic,
+  handleImageError,
+  DEFAULT_IMAGE_PLACEHOLDER,
 } from '../../../services/storageService';
 
 interface AdminProductsTabProps {
@@ -324,6 +326,11 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
         } catch (storageErr) {
           console.warn('Storage image cleanup error (ignored to complete doc delete):', storageErr);
         }
+      }
+      if (productToDelete.imageUrl && isFirebaseStorageUrl(productToDelete.imageUrl)) {
+        try {
+          await deleteStorageFile(productToDelete.imageUrl);
+        } catch {}
       }
 
       // 2. Delete document from Firestore
@@ -628,6 +635,22 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
         sanitizedImages[0].isMain = true;
       }
 
+      const mainImageUrl = getMainImageUrl(sanitizedImages) || (sanitizedImages[0]?.url ?? '');
+
+      // Detect replaced/deleted images from old version and clean up Firebase Storage
+      const existingProduct = products.find((p) => p.id === prodId);
+      if (existingProduct?.images && existingProduct.images.length > 0) {
+        const currentSavedUrls = new Set(sanitizedImages.map((img) => img.url));
+        const oldImages = normalizeProductImages(existingProduct.images);
+        for (const oldImg of oldImages) {
+          if (!currentSavedUrls.has(oldImg.url) && (oldImg.path || isFirebaseStorageUrl(oldImg.url))) {
+            deleteStorageFile(oldImg.path || oldImg.url).catch((cleanErr) => {
+              console.warn('[Storage Orphan Cleanup]:', cleanErr);
+            });
+          }
+        }
+      }
+
       const payload: Record<string, any> = {
         id: prodId,
         name: editingProduct.name.trim(),
@@ -636,6 +659,7 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
         price: Number(editingProduct.price) || 0,
         categoryId: editingProduct.categoryId || 'general',
         categoryName: categories.find((c) => c.slug === editingProduct.categoryId)?.name || 'عام',
+        imageUrl: mainImageUrl,
         images: sanitizedImages,
         colors: editingProduct.colors || ['أسود'],
         sizes: editingProduct.sizes || ['M', 'L'],
@@ -814,6 +838,8 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
                                 src={mainImage}
                                 alt={p.name}
                                 className="w-full h-full object-contain object-center"
+                                loading="lazy"
+                                onError={handleImageError}
                               />
                             </div>
                           ) : (
@@ -988,6 +1014,8 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
                     src={getMainImageUrl(productToDelete.images)}
                     alt={productToDelete.name}
                     className="w-full h-full object-contain object-center"
+                    loading="lazy"
+                    onError={handleImageError}
                   />
                 </div>
               ) : (
@@ -1372,6 +1400,8 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
                                   alt={img.name || ''}
                                   className="w-full h-auto object-contain block"
                                   style={{ width: '100%', height: 'auto', objectFit: 'contain' }}
+                                  loading="lazy"
+                                  onError={handleImageError}
                                 />
 
                                 {/* Main Image Badge */}

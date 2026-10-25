@@ -18,7 +18,7 @@ import { useCart } from '../context/CartContext';
 import { useStore } from '../context/StoreContext';
 import { SizeGuideModal } from '../components/SizeGuideModal';
 import { ProductCard } from '../components/ProductCard';
-import { getMainImageUrl, getAllImageUrls } from '../services/storageService';
+import { getMainImageUrl, getAllImageUrls, handleImageError } from '../services/storageService';
 
 interface ProductDetailPageProps {
   product: Product;
@@ -185,6 +185,8 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
                 alt={product.name}
                 className="w-full h-auto object-contain block transition-all duration-300"
                 style={{ width: '100%', height: 'auto', objectFit: 'contain' }}
+                loading="lazy"
+                onError={handleImageError}
               />
             ) : (
               <div className="w-full aspect-[4/3] flex flex-col items-center justify-center text-neutral-400 p-8">
@@ -225,7 +227,13 @@ export const ProductDetailPage: React.FC<ProductDetailPageProps> = ({
                     }`}
                     style={{ flexShrink: 0 }}
                   >
-                    <img src={img} alt="" className="w-full h-full object-contain object-center" />
+                    <img
+                      src={img}
+                      alt=""
+                      className="w-full h-full object-contain object-center"
+                      loading="lazy"
+                      onError={handleImageError}
+                    />
                   </button>
                 ))}
               </div>

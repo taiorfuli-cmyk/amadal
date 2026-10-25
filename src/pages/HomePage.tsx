@@ -15,6 +15,7 @@ import { useStore } from '../context/StoreContext';
 import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import { DEFAULT_HOMEPAGE } from '../services/storeService';
+import { handleImageError } from '../services/storageService';
 
 interface HomePageProps {
   products: Product[];
@@ -58,6 +59,8 @@ export const HomePage: React.FC<HomePageProps> = ({
               }
               alt="AMADAL Contemporary Streetwear"
               className="w-full h-full object-cover object-center opacity-45 scale-105 animate-fade-in"
+              loading="lazy"
+              onError={handleImageError}
             />
             <div className="absolute inset-0 bg-gradient-to-t from-neutral-950 via-neutral-950/40 to-neutral-950/70" />
           </div>
@@ -128,6 +131,8 @@ export const HomePage: React.FC<HomePageProps> = ({
                 }
                 alt={cat.name}
                 className="w-full h-full object-cover object-center opacity-85 group-hover:scale-105 group-hover:opacity-95 transition-all duration-700"
+                loading="lazy"
+                onError={handleImageError}
               />
               <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent" />
               

@@ -18,10 +18,14 @@ import {
 import { Product, ProductImage, ProductVariant, Category } from '../../types';
 import {
   uploadProductImage,
+  deleteStorageFile,
   normalizeProductImages,
+  getMainImageUrl,
   validateImageFile,
   translateStorageErrorToArabic,
   compressAndConvertToWebP,
+  DEFAULT_IMAGE_PLACEHOLDER,
+  handleImageError,
 } from '../../services/storageService';
 
 export interface ProductFormProps {
@@ -384,13 +388,22 @@ export const ProductForm: React.FC<ProductFormProps> = ({
     updateProduct({ ...product, images: updated });
   };
 
-  // Delete an image
-  const handleDeleteImage = (index: number) => {
+  // Delete an image and clean up from cloud storage
+  const handleDeleteImage = async (index: number) => {
+    const targetImg = images[index];
     const updated = images.filter((_, i) => i !== index);
     if (updated.length > 0 && !updated.some((img) => img.isMain)) {
       updated[0].isMain = true;
     }
-    updateProduct({ ...product, images: updated });
+    const cleanMainUrl = getMainImageUrl(updated) || (updated[0]?.url ?? '');
+    updateProduct({ ...product, images: updated, imageUrl: cleanMainUrl });
+
+    // Clean up from Firebase Storage if it's a cloud storage file
+    if (targetImg && (targetImg.path || targetImg.url)) {
+      deleteStorageFile(targetImg.path || targetImg.url).catch((err) => {
+        console.warn('Storage file deletion notice:', err);
+      });
+    }
   };
 
   // Add image by direct URL
@@ -406,7 +419,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({
       order: images.length,
     };
     const updated = [...images, newImg];
-    updateProduct({ ...product, images: updated });
+    const mainUrl = getMainImageUrl(updated) || updated[0]?.url || '';
+    updateProduct({ ...product, images: updated, imageUrl: mainUrl });
     setTempImageUrl('');
     setShowUrlInput(false);
   };
@@ -414,7 +428,13 @@ export const ProductForm: React.FC<ProductFormProps> = ({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving || isUploading) return;
-    await onSave(product);
+    const currentImgs = normalizeProductImages(product.images);
+    const mainImgUrl = getMainImageUrl(currentImgs) || (currentImgs[0]?.url ?? '');
+    await onSave({
+      ...product,
+      imageUrl: mainImgUrl,
+      images: currentImgs,
+    });
   };
 
   return (
@@ -544,7 +564,7 @@ export const ProductForm: React.FC<ProductFormProps> = ({
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept="image/*,.jpg,.jpeg,.png,.webp,.heic,.heif"
+                accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
                 onChange={handleFilesSelected}
                 className="hidden"
               />
@@ -699,6 +719,8 @@ export const ProductForm: React.FC<ProductFormProps> = ({
                     src={img.url}
                     alt={img.name || `صورة ${idx + 1}`}
                     className="w-full h-full object-contain p-1"
+                    loading="lazy"
+                    onError={handleImageError}
                   />
 
                   {/* Badges & Actions Overlay */}

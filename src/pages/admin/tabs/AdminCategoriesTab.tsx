@@ -21,9 +21,10 @@ import {
   deleteStorageFile,
   validateImageFile,
   isFirebaseStorageUrl,
-  fileToBase64,
   compressAndConvertToWebP,
-  translateStorageErrorToArabic
+  translateStorageErrorToArabic,
+  handleImageError,
+  DEFAULT_IMAGE_PLACEHOLDER,
 } from '../../../services/storageService';
 
 interface AdminCategoriesTabProps {
@@ -41,7 +42,6 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
 
   // Image Upload & Preview State
   const [selectedImageFile, setSelectedImageFile] = useState<File | null>(null);
-  const [bufferedImageBase64, setBufferedImageBase64] = useState<string | null>(null);
   const [imagePreviewUrl, setImagePreviewUrl] = useState<string | null>(null);
   const [originalImageUrl, setOriginalImageUrl] = useState<string | null>(null);
   const [uploadStatus, setUploadStatus] = useState<'idle' | 'uploading' | 'success' | 'error'>('idle');
@@ -78,7 +78,6 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
       isActive: true,
     });
     setSelectedImageFile(null);
-    setBufferedImageBase64(null);
     setImagePreviewUrl(null);
     setOriginalImageUrl(null);
     setUploadStatus('idle');
@@ -96,7 +95,6 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
     }
     setEditingCat({ ...cat });
     setSelectedImageFile(null);
-    setBufferedImageBase64(null);
     setImagePreviewUrl(cat.imageUrl || null);
     setOriginalImageUrl(cat.imageUrl || null);
     setUploadStatus('idle');
@@ -199,7 +197,6 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
       URL.revokeObjectURL(imagePreviewUrl);
     }
     setSelectedImageFile(null);
-    setBufferedImageBase64(null);
     setImagePreviewUrl(null);
     if (editingCat) {
       setEditingCat({ ...editingCat, imageUrl: '' });
@@ -219,7 +216,6 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
     setIsEditing(false);
     setEditingCat(null);
     setSelectedImageFile(null);
-    setBufferedImageBase64(null);
     setImagePreviewUrl(null);
     if (fileInputRef.current) {
       fileInputRef.current.value = '';
@@ -315,8 +311,7 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
         const uploadResult = await uploadCategoryImage(
           targetCategoryId,
           selectedImageFile,
-          (pct) => setUploadProgress(pct),
-          bufferedImageBase64 || undefined
+          (pct) => setUploadProgress(pct)
         );
         if (uploadResult?.url) {
           finalImageUrl = uploadResult.url;
@@ -364,7 +359,6 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
       setIsEditing(false);
       setEditingCat(null);
       setSelectedImageFile(null);
-      setBufferedImageBase64(null);
       setImagePreviewUrl(null);
       if (fileInputRef.current) {
         fileInputRef.current.value = '';
@@ -422,7 +416,13 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
             >
               <div className="relative aspect-[16/9] w-full bg-neutral-100">
                 {cat.imageUrl ? (
-                  <img src={cat.imageUrl} alt={cat.name} className="w-full h-full object-cover" />
+                  <img
+                    src={cat.imageUrl}
+                    alt={cat.name}
+                    className="w-full h-full object-cover"
+                    loading="lazy"
+                    onError={handleImageError}
+                  />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-neutral-300">
                     <Tag className="w-10 h-10" />
@@ -506,6 +506,8 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
                   src={categoryToDelete.imageUrl}
                   alt={categoryToDelete.name}
                   className="w-12 h-12 object-cover rounded-xl bg-neutral-200 shrink-0"
+                  loading="lazy"
+                  onError={handleImageError}
                 />
               ) : (
                 <div className="w-12 h-12 rounded-xl bg-neutral-200 shrink-0 flex items-center justify-center text-neutral-400">
@@ -705,6 +707,8 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
                           src={imagePreviewUrl}
                           alt="معاينة صورة الصنف"
                           className="w-full h-full object-contain"
+                          loading="lazy"
+                          onError={handleImageError}
                         />
                         <div className="absolute top-2 right-2 flex items-center gap-1.5 bg-black/70 backdrop-blur-xs text-white text-[10px] font-mono px-2 py-0.5 rounded-md">
                           <ImageIcon className="w-3 h-3 text-amber-400" />

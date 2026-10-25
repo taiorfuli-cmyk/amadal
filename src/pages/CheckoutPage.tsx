@@ -16,7 +16,7 @@ import { ALGERIA_WILAYAS, WilayaInfo, Order, OrderItem, Product } from '../types
 import { collection, doc, getDoc, getDocs } from 'firebase/firestore';
 import { db } from '../firebase';
 import confetti from 'canvas-confetti';
-import { getMainImageUrl } from '../services/storageService';
+import { getMainImageUrl, handleImageError } from '../services/storageService';
 import { submitOrderSafely, generateOrderIdempotencyKey } from '../services/orderService';
 
 interface CheckoutPageProps {
@@ -617,6 +617,8 @@ export const CheckoutPage: React.FC<CheckoutPageProps> = ({
                       src={item.image}
                       alt={item.productName}
                       className="w-full h-full object-contain object-center"
+                      loading="lazy"
+                      onError={handleImageError}
                     />
                   </div>
                   <div className="flex-1">

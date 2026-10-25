@@ -204,7 +204,7 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/jpeg,image/png,image/webp,image/jpg"
+        accept=".jpg,.jpeg,.png,.webp,image/jpeg,image/png,image/webp"
         onChange={handleFileChange}
         disabled={isBusy}
         className="hidden"
@@ -219,6 +219,7 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
               src={displayImage}
               alt={label}
               className={`w-full max-h-56 object-contain rounded-xl ${aspectRatioClass}`}
+              loading="lazy"
               onError={() => {
                 if (status !== 'uploading' && status !== 'validating') {
                   setStatus('error');
@@ -265,7 +266,7 @@ export const ImageUploadField: React.FC<ImageUploadFieldProps> = ({
               اضغط لرفع صورة من جهازك
             </span>
             <span className="text-[11px] text-neutral-400 mt-0.5 block">
-              الصيغ المدعومة: JPG، JPEG، PNG، WEBP (بحد أقصى 10 ميغابايت)
+              الصيغ المدعومة: JPEG، PNG، WebP (بحد أقصى 5 ميغابايت)
             </span>
           </div>
         )}

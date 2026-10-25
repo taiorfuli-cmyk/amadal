@@ -3,7 +3,6 @@ import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
-import multer from 'multer';
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import {
   getFirestore,
@@ -107,13 +106,6 @@ async function startServer() {
 
   app.use(express.json({ limit: '30mb' }));
   app.use(express.urlencoded({ limit: '30mb', extended: true }));
-
-  // Static uploads directory serving
-  const uploadsDir = path.resolve(__dirname, 'public', 'uploads');
-  if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-  }
-  app.use('/uploads', express.static(uploadsDir));
 
   // ─────────────────────────────────────────────────────────────
   // 1. GET Anderson Settings
@@ -1241,107 +1233,6 @@ async function startServer() {
         success: false,
         error: err.message || 'حدث خطأ أثناء معالجة وحفظ الطلب. يرجى المحاولة مرة أخرى.',
       });
-    }
-  });
-
-  // ─────────────────────────────────────────────────────────────
-  // 11. POST Save Storage File (Categories / Media upload)
-  // Supports both multipart/form-data (FormData) and application/json (Base64)
-  // ─────────────────────────────────────────────────────────────
-  const storageUpload = multer({
-    storage: multer.memoryStorage(),
-    limits: { fileSize: 25 * 1024 * 1024 }, // 25MB max
-  }).single('file');
-
-  app.post('/api/storage/upload', (req, res) => {
-    storageUpload(req, res, async (multerErr) => {
-      if (multerErr) {
-        console.error('[Storage API Multer Error]:', multerErr);
-        return res.status(400).json({ success: false, error: 'حجم الملف يتجاوز الحد المسموح به (25 ميغابايت).' });
-      }
-
-      try {
-        const folder = (req.body?.folder || 'general').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
-        const subfolder = (req.body?.subfolder || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
-        let fileName = (req.body?.fileName || '').trim().replace(/[^a-zA-Z0-9_.-]/g, '_');
-
-        let fileBuffer: Buffer | null = null;
-
-        if (req.file) {
-          fileBuffer = req.file.buffer;
-          if (!fileName) {
-            const rawExt = path.extname(req.file.originalname) || '.jpg';
-            fileName = `${Date.now()}_${Math.random().toString(36).substring(2, 7)}${rawExt}`;
-          }
-        } else if (req.body?.fileBase64) {
-          const base64Data = req.body.fileBase64.replace(/^data:[^;]+;base64,/, '');
-          fileBuffer = Buffer.from(base64Data, 'base64');
-        }
-
-        if (!fileBuffer || !fileName) {
-          return res.status(400).json({ success: false, error: 'بيانات الملف غير مكتملة أو الملف مفقود.' });
-        }
-
-        const cleanFolder = folder || 'general';
-        const cleanSub = subfolder || '';
-        const cleanFileName = fileName;
-
-        const targetDir = cleanSub ? path.join(uploadsDir, cleanFolder, cleanSub) : path.join(uploadsDir, cleanFolder);
-        if (!fs.existsSync(targetDir)) {
-          fs.mkdirSync(targetDir, { recursive: true });
-        }
-
-        const filePathOnDisk = path.join(targetDir, cleanFileName);
-        fs.writeFileSync(filePathOnDisk, fileBuffer);
-
-        const relativeUrl = cleanSub
-          ? `/uploads/${cleanFolder}/${cleanSub}/${cleanFileName}`
-          : `/uploads/${cleanFolder}/${cleanFileName}`;
-
-        const storagePath = cleanSub
-          ? `${cleanFolder}/${cleanSub}/${cleanFileName}`
-          : `${cleanFolder}/${cleanFileName}`;
-
-        return res.json({
-          success: true,
-          url: relativeUrl,
-          path: storagePath,
-          name: cleanFileName,
-        });
-      } catch (err: any) {
-        console.error('[Storage API Upload Error]:', err);
-        return res.status(500).json({ success: false, error: err.message || 'فشل حفظ الملف على الخادم' });
-      }
-    });
-  });
-
-  // ─────────────────────────────────────────────────────────────
-  // 10. POST Delete Storage File
-  // ─────────────────────────────────────────────────────────────
-  app.post('/api/storage/delete', async (req, res) => {
-    try {
-      const { pathOrUrl } = req.body;
-      if (!pathOrUrl || typeof pathOrUrl !== 'string') {
-        return res.json({ success: true });
-      }
-
-      const relative = pathOrUrl.replace(/^\/uploads\//, '').replace(/^uploads\//, '');
-      const normalized = path.normalize(relative);
-      if (normalized.startsWith('..')) {
-        return res.status(400).json({ success: false, error: 'مسار غير صالح' });
-      }
-
-      const fullPath = path.join(uploadsDir, normalized);
-      if (fs.existsSync(fullPath)) {
-        try {
-          fs.unlinkSync(fullPath);
-        } catch {}
-      }
-
-      return res.json({ success: true });
-    } catch (err: any) {
-      console.warn('[Storage API Delete Error]:', err);
-      return res.json({ success: false });
     }
   });
 

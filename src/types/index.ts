@@ -32,6 +32,7 @@ export interface Product {
   salePrice?: number;
   categoryId: string;
   categoryName?: string;
+  imageUrl?: string;
   images: (string | ProductImage)[];
   colors: string[];
   sizes: string[];
