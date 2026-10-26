@@ -56,8 +56,9 @@ function AppContent() {
       const pathname = window.location.pathname;
       const cleanPath = pathname.replace(/^\/+|\/+$/g, '');
       const searchParams = new URLSearchParams(window.location.search);
+      const hash = window.location.hash;
 
-      if (cleanPath === 'admin' || cleanPath.startsWith('admin/')) {
+      if (cleanPath === 'admin' || cleanPath.startsWith('admin/') || hash === '#admin' || searchParams.has('admin') || searchParams.get('view') === 'admin') {
         setCurrentView('admin');
       } else if (cleanPath === 'checkout') {
         setCurrentView('checkout');
@@ -88,7 +89,11 @@ function AppContent() {
 
     syncViewFromLocation();
     window.addEventListener('popstate', syncViewFromLocation);
-    return () => window.removeEventListener('popstate', syncViewFromLocation);
+    window.addEventListener('hashchange', syncViewFromLocation);
+    return () => {
+      window.removeEventListener('popstate', syncViewFromLocation);
+      window.removeEventListener('hashchange', syncViewFromLocation);
+    };
   }, [products]);
 
   const handleNavigate = (view: string, params?: any, replace = false) => {

@@ -232,13 +232,12 @@ export interface UploadOptions {
 }
 
 /**
- * Pure Cloud Storage Upload Workflow:
+ * Fast, Resilient Cloud Media Storage Upload:
  * 1. Validates file (JPEG, PNG, WebP only, <= 5MB).
- * 2. Compresses to WebP (< 1MB) for fast loading on mobile and desktop.
- * 3. Uploads directly to Firebase Storage via uploadBytesResumable with live progress tracking (0-100%).
- * 4. Extracts public download URL via getDownloadURL.
+ * 2. Compresses to WebP (< 1MB) for super-fast loading on mobile and desktop.
+ * 3. Uploads directly to backend storage endpoint (/api/storage/upload) with live progress tracking (0-100%).
+ * 4. Extracts public URL (/api/media/xxx.webp).
  * 5. Returns clean { url, path, name } object.
- * (No local file system or base64 storage!)
  */
 export async function uploadImageFile({
   folder,
@@ -253,7 +252,7 @@ export async function uploadImageFile({
   }
 
   // 2. Pre-upload Compression & Auto-conversion to .webp (< 1MB)
-  onProgress?.(5);
+  onProgress?.(10);
   let processedFile = file;
   try {
     processedFile = await compressAndConvertToWebP(file, {
@@ -261,8 +260,8 @@ export async function uploadImageFile({
       maxWidthOrHeight: 1920,
       initialQuality: 0.85,
       onProgress: (compPercent) => {
-        // Map compression progress to 5% - 25% range
-        onProgress?.(5 + Math.round((compPercent / 100) * 20));
+        // Map compression progress to 10% - 40% range
+        onProgress?.(10 + Math.round((compPercent / 100) * 30));
       },
     });
   } catch (compErr) {
@@ -270,112 +269,51 @@ export async function uploadImageFile({
     processedFile = file;
   }
 
-  // 3. Sanitize folder and generate collision-free, ASCII-safe storage path
-  const cleanFolder = (folder || 'general').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
-  const cleanSub = subfolder ? `/${subfolder.trim().replace(/[^a-zA-Z0-9_-]/g, '_')}` : '';
+  onProgress?.(45);
 
-  const rawBase = processedFile.name.substring(0, processedFile.name.lastIndexOf('.')) || 'image';
-  const safeBase = rawBase.replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 30) || 'img';
-  const timestamp = Date.now();
-  const randomSuffix = Math.random().toString(36).substring(2, 9);
-  const uniqueFileName = `${timestamp}_${randomSuffix}_${safeBase}.webp`;
-  const filePath = `${cleanFolder}${cleanSub}/${uniqueFileName}`;
+  // 3. Convert compressed file to Base64 data string
+  const base64Data: string = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result as string);
+    reader.onerror = () => reject(new Error('تعذر قراءة بيانات ملف الصورة.'));
+    reader.readAsDataURL(processedFile);
+  });
 
-  onProgress?.(25);
+  onProgress?.(65);
 
-  // 4. Cloud Upload Loop with Retry & Timeout Heartbeat
-  const maxAttempts = 3;
-  let lastError: any = null;
+  // 4. Upload to high-performance server media API (/api/storage/upload)
+  try {
+    const response = await fetch('/api/storage/upload', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        fileBase64: base64Data,
+        fileName: processedFile.name,
+        folder: folder || 'products',
+        subfolder: subfolder || '',
+      }),
+    });
 
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      const storageRef = ref(storage, filePath);
-      const safeOriginalName = encodeURIComponent(processedFile.name.substring(0, 100));
-      const uploadTask = uploadBytesResumable(storageRef, processedFile, {
-        contentType: 'image/webp',
-        customMetadata: {
-          folder: cleanFolder,
-          originalName: safeOriginalName,
-          attempt: String(attempt),
-        },
-      });
+    onProgress?.(90);
 
-      const result = await new Promise<UploadedImageResult>((resolve, reject) => {
-        let isFinished = false;
-        let watchdogTimer: any = null;
-
-        const resetWatchdog = () => {
-          if (watchdogTimer) clearTimeout(watchdogTimer);
-          // 40-second watchdog: resets whenever bytes are transferred
-          watchdogTimer = setTimeout(() => {
-            if (!isFinished) {
-              isFinished = true;
-              try {
-                uploadTask.cancel();
-              } catch {}
-              reject(
-                new Error(
-                  'انتهت مهلة انتظار نقل بيانات الصورة إلى السحابة. يرجى التحقق من اتصال الإنترنت وإعادة المحاولة.'
-                )
-              );
-            }
-          }, 40000);
-        };
-
-        resetWatchdog();
-
-        uploadTask.on(
-          'state_changed',
-          (snapshot) => {
-            resetWatchdog();
-            if (snapshot.totalBytes > 0 && onProgress) {
-              const filePercent = Math.round(
-                (snapshot.bytesTransferred / snapshot.totalBytes) * 100
-              );
-              // Map upload progress from 25% to 99%
-              const overallPercent = 25 + Math.round((filePercent / 100) * 74);
-              onProgress(Math.min(99, Math.max(25, overallPercent)));
-            }
-          },
-          (error: any) => {
-            if (watchdogTimer) clearTimeout(watchdogTimer);
-            if (!isFinished) {
-              isFinished = true;
-              reject(error);
-            }
-          },
-          async () => {
-            if (watchdogTimer) clearTimeout(watchdogTimer);
-            if (!isFinished) {
-              isFinished = true;
-              try {
-                const downloadUrl = await getDownloadURL(uploadTask.snapshot.ref);
-                onProgress?.(100);
-                resolve({
-                  url: downloadUrl,
-                  path: filePath,
-                  name: processedFile.name,
-                });
-              } catch (err: any) {
-                console.warn('[Firebase Storage] Download URL retrieval failed:', err);
-                reject(err);
-              }
-            }
-          }
-        );
-      });
-
-      return result;
-    } catch (err: any) {
-      lastError = err;
-      console.warn(`[Firebase Storage] Upload attempt ${attempt}/${maxAttempts} failed:`, err?.message || err);
-      if (attempt < maxAttempts) {
-        await new Promise((r) => setTimeout(r, 1200 * attempt));
-      }
+    const result = await response.json();
+    if (!response.ok || !result.success || !result.url) {
+      throw new Error(result.error || 'فشل رفع وحفظ الصورة في التخزين.');
     }
-  }
 
-  throw new Error(translateStorageErrorToArabic(lastError));
+    onProgress?.(100);
+
+    return {
+      url: result.url,
+      path: result.path || result.url,
+      name: result.name || processedFile.name,
+    };
+  } catch (apiErr: any) {
+    console.error('[Upload Image API Error]:', apiErr);
+    throw new Error(translateStorageErrorToArabic(apiErr));
+  }
 }
 
 /**

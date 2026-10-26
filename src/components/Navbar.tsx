@@ -5,7 +5,6 @@ import {
   Search,
   Menu,
   X,
-  User,
   ChevronDown,
   ArrowLeft,
   ChevronRight,
@@ -14,7 +13,6 @@ import {
 import { AmadalLogo } from './AmadalLogo';
 import { useCart } from '../context/CartContext';
 import { useStore } from '../context/StoreContext';
-import { useAuth } from '../context/AuthContext';
 
 interface NavbarProps {
   currentView: string;
@@ -29,7 +27,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 }) => {
   const { totalItemsCount, openDrawer } = useCart();
   const { settings, categories } = useStore();
-  const { isAdmin } = useAuth();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [mobileCategoriesExpanded, setMobileCategoriesExpanded] = useState(true);
@@ -191,19 +188,6 @@ export const Navbar: React.FC<NavbarProps> = ({
                 </span>
               )}
             </button>
-
-            {/* Admin Dashboard Portal Link */}
-            <button
-              onClick={() => handleNav('admin')}
-              className={`p-2 rounded-full transition-colors ${
-                isAdmin
-                  ? 'bg-neutral-900 text-white hover:bg-neutral-800'
-                  : 'text-neutral-500 hover:text-black hover:bg-neutral-100'
-              }`}
-              title={isAdmin ? 'لوحة التحكم (مسجل كمسؤول)' : 'دخول الإدارة'}
-            >
-              <User className="w-5 h-5" />
-            </button>
           </div>
         </div>
       </div>
@@ -305,13 +289,6 @@ export const Navbar: React.FC<NavbarProps> = ({
 
                 {/* Drawer Footer */}
                 <div className="p-5 border-t border-neutral-100 bg-neutral-50/60 space-y-2.5 sticky bottom-0">
-                  <button
-                    onClick={() => handleNav('admin')}
-                    className="w-full py-2.5 px-4 bg-white border border-neutral-200 hover:border-black text-neutral-900 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-sm transition-all"
-                  >
-                    <User className="w-4 h-4" />
-                    <span>لوحة التحكم (الإدارة)</span>
-                  </button>
 
                   {settings.whatsappNumber && (
                     <a

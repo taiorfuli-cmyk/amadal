@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Customer } from '../../../types';
 import { Search, MessageCircle, Phone, User, ShoppingBag } from 'lucide-react';
 import { useStore } from '../../../context/StoreContext';
+import { formatAlgerianPhone, getWhatsAppNumber } from '../../../utils/phoneUtils';
 
 interface AdminCustomersTabProps {
   customers: Customer[];
@@ -74,8 +75,8 @@ export const AdminCustomersTab: React.FC<AdminCustomersTabProps> = ({ customers 
                         <span className="font-bold text-neutral-900">{c.name}</span>
                       </div>
                     </td>
-                    <td className="py-3 px-4 font-mono font-medium" dir="ltr">
-                      {c.phone}
+                    <td className="py-3 px-4 font-mono font-medium text-neutral-900" dir="ltr">
+                      {formatAlgerianPhone(c.phone)}
                     </td>
                     <td className="py-3 px-4 text-neutral-600">{c.wilaya || '-'}</td>
                     <td className="py-3 px-4 font-mono font-bold">
@@ -90,13 +91,14 @@ export const AdminCustomersTab: React.FC<AdminCustomersTabProps> = ({ customers 
                     <td className="py-3 px-4 text-left">
                       <div className="flex items-center justify-end gap-2">
                         <a
-                          href={`https://wa.me/${c.phone.replace(/[^0-9]/g, '')}`}
+                          href={`https://wa.me/${getWhatsAppNumber(c.phone)}`}
                           target="_blank"
                           rel="noreferrer"
-                          className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg transition-colors"
-                          title="واتساب"
+                          className="p-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg transition-colors flex items-center gap-1"
+                          title="محادثة واتساب"
                         >
                           <MessageCircle className="w-4 h-4" />
+                          <span className="text-[10px] font-bold hidden md:inline">واتساب</span>
                         </a>
                         <a
                           href={`tel:${c.phone}`}

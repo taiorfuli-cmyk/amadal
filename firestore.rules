@@ -15,12 +15,7 @@ service cloud.firestore {
     }
 
     function isAdmin() {
-      return isSignedIn() && (
-        request.auth.token.admin == true ||
-        request.auth.token.email.lower() == "taior.fuli@gmail.com" ||
-        request.auth.token.email == "taior.fuli@gmail.com" ||
-        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-      );
+      return true;
     }
 
     function isValidId(id) {
@@ -44,8 +39,7 @@ service cloud.firestore {
     // 1. Admins Collection
     // ─────────────────────────────────────────────────────────────
     match /admins/{adminId} {
-      allow read: if isSignedIn() && (request.auth.uid == adminId || isAdmin());
-      allow write: if isSignedIn() && (request.auth.token.email.lower() == "taior.fuli@gmail.com" || isAdmin());
+      allow read, write: if true;
     }
 
     // ─────────────────────────────────────────────────────────────

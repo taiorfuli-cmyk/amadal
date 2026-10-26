@@ -12,6 +12,7 @@ import {
   ALGERIA_WILAYAS,
 } from '../types';
 import { getMainImageUrl } from './storageService';
+import { formatAlgerianPhone } from '../utils/phoneUtils';
 
 export interface CreateOrderItemInput {
   productId: string;
@@ -67,10 +68,11 @@ export async function createOrderWithTransaction(
     throw new Error('يرجى إدخال الاسم الكامل (حرفين على الأقل).');
   }
 
-  const cleanPhone = params.phone.replace(/[^0-9]/g, '');
-  if (cleanPhone.length < 9 || cleanPhone.length > 15) {
-    throw new Error('يرجى إدخال رقم هاتف صالح (مثال: 0550123456).');
+  const rawDigits = params.phone.replace(/[^0-9]/g, '');
+  if (rawDigits.length < 9 || rawDigits.length > 15) {
+    throw new Error('يرجى إدخال رقم هاتف صالح (مثال: 0784669514 أو 0550123456).');
   }
+  const formattedPhone = formatAlgerianPhone(params.phone);
 
   const cleanWilayaCode = params.wilayaCode.trim().padStart(2, '0');
   const wilayaInfo = ALGERIA_WILAYAS.find((w) => w.code === cleanWilayaCode);
@@ -338,7 +340,7 @@ export async function createOrderWithTransaction(
       orderNumber,
       idempotencyKey: cleanIdempotencyKey,
       customerName,
-      phone: cleanPhone,
+      phone: formattedPhone,
       wilaya: wilayaInfo.name,
       wilayaCode: cleanWilayaCode,
       commune,

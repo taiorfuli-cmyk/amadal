@@ -16,7 +16,13 @@ import {
   ExternalLink,
   Lock,
   UserCheck,
-  Send
+  Send,
+  Eye,
+  EyeOff,
+  KeyRound,
+  User,
+  RefreshCw,
+  AlertCircle
 } from 'lucide-react';
 import { Product, Order, Customer, Category } from '../../types';
 import { collection, onSnapshot, query, orderBy, getDocs } from 'firebase/firestore';
@@ -37,6 +43,7 @@ import { AdminShippingTab } from './tabs/AdminShippingTab';
 import { AdminHomepageTab } from './tabs/AdminHomepageTab';
 import { AdminSettingsTab } from './tabs/AdminSettingsTab';
 import { AdminAndersonTab } from './tabs/AdminAndersonTab';
+import { AdminAccountTab } from './tabs/AdminAccountTab';
 import { Coupon } from '../../types';
 
 interface AdminDashboardProps {
@@ -44,7 +51,7 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore }) => {
-  const { currentUser, isAdmin, loginWithGoogle, logout, isLoading: authLoading } = useAuth();
+  const { currentUser, isAdmin, adminUsername, loginWithCredentials, logout, isLoading: authLoading } = useAuth();
   const { settings, categories, refreshData } = useStore();
 
   const [activeTab, setActiveTab] = useState<string>('overview');
@@ -54,8 +61,27 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
   const [coupons, setCoupons] = useState<Coupon[]>([]);
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
 
-  // For testing convenience when deploying
-  const [bypassUnlocked, setBypassUnlocked] = useState(false);
+  // Traditional Login Credentials Form State
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
+  const [showLoginPassword, setShowLoginPassword] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+
+  const handleLoginSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoginError(null);
+    if (!loginUsername.trim() || !loginPassword) {
+      setLoginError('يرجى إدخال اسم المستخدم وكلمة المرور.');
+      return;
+    }
+    setIsLoggingIn(true);
+    const result = await loginWithCredentials(loginUsername, loginPassword);
+    setIsLoggingIn(false);
+    if (!result.success) {
+      setLoginError(result.error || 'اسم المستخدم أو كلمة المرور غير صحيحة.');
+    }
+  };
 
   // Subscribe to Products
   useEffect(() => {
@@ -119,49 +145,121 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
     }
   }, []);
 
-  const hasAccess = isAdmin || bypassUnlocked;
+  // Loading State
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-neutral-950 flex flex-col justify-center items-center text-white px-4">
+        <RefreshCw className="w-8 h-8 animate-spin text-neutral-400 mb-3" />
+        <span className="text-xs font-mono text-neutral-400">AMADAL SECURITY VERIFICATION...</span>
+      </div>
+    );
+  }
 
-  // Unauthenticated / Non-admin Login Screen
-  if (!hasAccess && !authLoading) {
+  // Unauthenticated Screen - Strictly Username & Password
+  if (!isAdmin) {
     return (
       <div className="min-h-screen bg-neutral-950 flex flex-col justify-center items-center px-4 py-12 text-white">
-        <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-8 sm:p-10 text-center space-y-6 shadow-2xl">
-          <AmadalLogo variant="light" size="lg" customLogoUrl={settings.logoUrl} className="mx-auto" />
-
-          <div>
-            <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-800 text-xs text-neutral-300 font-mono mb-2">
-              <Lock className="w-3.5 h-3.5 text-amber-400" />
-              <span>AMADAL ADMIN PORTAL</span>
+        <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-8 sm:p-10 space-y-6 shadow-2xl">
+          <div className="text-center space-y-3">
+            <AmadalLogo variant="light" size="lg" customLogoUrl={settings.logoUrl} className="mx-auto" />
+            <div>
+              <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-neutral-800 text-xs text-neutral-300 font-mono mb-2">
+                <Lock className="w-3.5 h-3.5 text-amber-400" />
+                <span>AMADAL ADMIN PORTAL</span>
+              </div>
+              <h2 className="text-xl font-bold text-white mt-1">بوابة إدارة المتجر</h2>
+              <p className="text-xs text-neutral-400 mt-1">
+                تسجيل الدخول مخصص حصرياً للمشرف وفريق الإدارة.
+              </p>
             </div>
-            <h2 className="text-xl font-bold text-white mt-1">بوابة إدارة المتجر</h2>
-            <p className="text-xs text-neutral-400 mt-1">
-              لوحة التحكم مخصصة لمالك المتجر وفريق إدارة AMADAL.
-            </p>
           </div>
 
-          <div className="space-y-3 pt-2">
-            <button
-              onClick={() => loginWithGoogle()}
-              className="w-full py-3.5 px-4 bg-white hover:bg-neutral-100 text-neutral-950 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-lg transition-all"
-            >
-              <UserCheck className="w-4 h-4" />
-              <span>تسجيل الدخول بحساب المالك (Google)</span>
-            </button>
+          {loginError && (
+            <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-center gap-2.5 text-xs animate-in fade-in">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
+              <span>{loginError}</span>
+            </div>
+          )}
 
-            {/* Quick Access for Store Reviewer / Demo Session */}
-            <button
-              onClick={() => setBypassUnlocked(true)}
-              className="w-full py-3 px-4 bg-neutral-800 hover:bg-neutral-750 text-neutral-300 rounded-xl text-xs font-semibold flex items-center justify-center gap-2 transition-all border border-neutral-700"
-            >
-              <ShieldCheck className="w-4 h-4 text-emerald-400" />
-              <span>دخول مباشر للوحة التحكم (معاينة الإدارة)</span>
-            </button>
-          </div>
+          <form onSubmit={handleLoginSubmit} className="space-y-4">
+            <div className="space-y-1.5 text-right">
+              <label className="block text-xs font-semibold text-neutral-300">
+                اسم المستخدم
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-neutral-400">
+                  <User className="w-4 h-4" />
+                </div>
+                <input
+                  type="text"
+                  value={loginUsername}
+                  onChange={(e) => {
+                    setLoginUsername(e.target.value);
+                    if (loginError) setLoginError(null);
+                  }}
+                  placeholder="اسم المستخدم"
+                  dir="ltr"
+                  autoComplete="username"
+                  required
+                  className="w-full pr-10 pl-4 py-3 bg-neutral-950 border border-neutral-800 focus:border-white focus:ring-1 focus:ring-white rounded-xl text-sm font-mono text-white outline-none transition-all placeholder:text-neutral-500"
+                />
+              </div>
+            </div>
 
-          <div className="pt-4 border-t border-neutral-800">
+            <div className="space-y-1.5 text-right">
+              <label className="block text-xs font-semibold text-neutral-300">
+                كلمة المرور
+              </label>
+              <div className="relative">
+                <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-neutral-400">
+                  <KeyRound className="w-4 h-4" />
+                </div>
+                <input
+                  type={showLoginPassword ? 'text' : 'password'}
+                  value={loginPassword}
+                  onChange={(e) => {
+                    setLoginPassword(e.target.value);
+                    if (loginError) setLoginError(null);
+                  }}
+                  placeholder="••••••••"
+                  dir="ltr"
+                  autoComplete="current-password"
+                  required
+                  className="w-full pr-10 pl-11 py-3 bg-neutral-950 border border-neutral-800 focus:border-white focus:ring-1 focus:ring-white rounded-xl text-sm font-mono text-white outline-none transition-all placeholder:text-neutral-500"
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowLoginPassword(!showLoginPassword)}
+                  className="absolute inset-y-0 left-0 pl-3 flex items-center text-neutral-400 hover:text-white transition-colors"
+                >
+                  {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={isLoggingIn}
+              className="w-full py-3.5 px-4 bg-white hover:bg-neutral-100 text-neutral-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all disabled:opacity-50 cursor-pointer mt-2"
+            >
+              {isLoggingIn ? (
+                <>
+                  <RefreshCw className="w-4 h-4 animate-spin text-neutral-950" />
+                  <span>جاري التحقق من بيانات الدخول...</span>
+                </>
+              ) : (
+                <>
+                  <Lock className="w-4 h-4" />
+                  <span>تسجيل الدخول</span>
+                </>
+              )}
+            </button>
+          </form>
+
+          <div className="pt-4 border-t border-neutral-800/80">
             <button
               onClick={onBackToStore}
-              className="text-xs text-neutral-400 hover:text-white flex items-center justify-center gap-1.5 mx-auto"
+              className="text-xs text-neutral-400 hover:text-white flex items-center justify-center gap-1.5 mx-auto transition-colors"
             >
               <ArrowRight className="w-3.5 h-3.5" />
               <span>الرجوع إلى المتجر الإلكتروني</span>
@@ -189,6 +287,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
     },
     { id: 'homepage', label: 'الصفحة الرئيسية', icon: Sliders },
     { id: 'settings', label: 'إعدادات المتجر', icon: Settings },
+    { id: 'account', label: 'حساب المشرف والأمان', icon: KeyRound },
   ];
 
   return (
@@ -219,12 +318,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
             <span>عرض المتجر المباشر</span>
           </button>
 
+          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 text-xs font-mono text-neutral-300">
+            <User className="w-3.5 h-3.5 text-neutral-400" />
+            <span>@{adminUsername || 'admin'}</span>
+          </div>
+
           <button
-            onClick={() => {
-              setBypassUnlocked(false);
-              logout();
-            }}
-            className="p-1.5 text-neutral-400 hover:text-red-400 rounded-lg transition-colors"
+            onClick={() => logout()}
+            className="p-1.5 text-neutral-400 hover:text-red-400 rounded-lg transition-colors cursor-pointer"
             title="تسجيل الخروج"
           >
             <LogOut className="w-4 h-4" />
@@ -350,6 +451,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
           {activeTab === 'homepage' && <AdminHomepageTab />}
 
           {activeTab === 'settings' && <AdminSettingsTab />}
+
+          {activeTab === 'account' && <AdminAccountTab />}
         </div>
       </div>
     </div>

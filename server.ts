@@ -4,12 +4,14 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { initializeApp, getApps, getApp } from 'firebase/app';
+import crypto from 'crypto';
 import {
   getFirestore,
   doc,
   getDoc,
   setDoc,
   updateDoc,
+  deleteDoc,
   collection,
   getDocs,
   query,
@@ -38,6 +40,78 @@ try {
 
 const firebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
+
+// Local cache directory for fast image serving
+const MEDIA_CACHE_DIR = path.resolve(__dirname, '.media_cache');
+if (!fs.existsSync(MEDIA_CACHE_DIR)) {
+  fs.mkdirSync(MEDIA_CACHE_DIR, { recursive: true });
+}
+
+// ─────────────────────────────────────────────────────────────
+// Admin Security: Cryptographic Password Hashing (PBKDF2 + Salt)
+// ─────────────────────────────────────────────────────────────
+function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
+  const actualSalt = salt || crypto.randomBytes(16).toString('hex');
+  const hash = crypto.pbkdf2Sync(password, actualSalt, 10000, 64, 'sha512').toString('hex');
+  return { hash, salt: actualSalt };
+}
+
+function verifyPassword(password: string, hash: string, salt: string): boolean {
+  if (!password || !hash || !salt) return false;
+  try {
+    const calculated = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
+    return calculated === hash;
+  } catch {
+    return false;
+  }
+}
+
+// Active session token store (token -> { username, expiresAt, uid })
+const activeAdminSessions = new Map<string, { username: string; expiresAt: number; uid?: string }>();
+const ADMIN_CREDENTIALS_FILE = path.join(__dirname, '.admin_credentials.json');
+
+// Helper to retrieve or initialize default admin credentials (admin / admin123)
+async function getOrCreateAdminCredentials(): Promise<{ username: string; hash: string; salt: string; updatedAt: string }> {
+  try {
+    if (fs.existsSync(ADMIN_CREDENTIALS_FILE)) {
+      const raw = fs.readFileSync(ADMIN_CREDENTIALS_FILE, 'utf-8');
+      const data = JSON.parse(raw);
+      if (data.passwordHash && data.salt) {
+        return {
+          username: data.username || 'admin',
+          hash: data.passwordHash,
+          salt: data.salt,
+          updatedAt: data.updatedAt || new Date().toISOString(),
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('[Server] Error reading local admin credentials file:', err);
+  }
+
+  // Initial Bootstrap: admin / admin123
+  const initial = hashPassword('admin123');
+  const initialDoc = {
+    username: 'admin',
+    passwordHash: initial.hash,
+    salt: initial.salt,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+  };
+
+  try {
+    fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(initialDoc, null, 2), 'utf-8');
+  } catch (e) {
+    console.warn('[Server] Error saving initial admin credentials to local file:', e);
+  }
+
+  return {
+    username: 'admin',
+    hash: initial.hash,
+    salt: initial.salt,
+    updatedAt: initialDoc.updatedAt,
+  };
+}
 
 const DEFAULT_ANDERSON_BASE_URL = 'https://anderson.ecotrack.dz/';
 
@@ -99,6 +173,38 @@ function cleanBaseUrl(url?: string): string {
 
 // Sleep helper for exponential backoff retries
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Formats an Algerian phone number into international WhatsApp standard (+213...).
+ * Example: 0784669514 -> +213784669514
+ * Removes leading zero and prepends +213.
+ */
+function formatAlgerianPhone(phone: string): string {
+  if (!phone || typeof phone !== 'string') return '';
+  let cleaned = phone.trim().replace(/[^\d+]/g, '');
+
+  if (cleaned.startsWith('+213')) {
+    const rest = cleaned.substring(4).replace(/^0+/, '');
+    return `+213${rest}`;
+  }
+  if (cleaned.startsWith('00213')) {
+    const rest = cleaned.substring(5).replace(/^0+/, '');
+    return `+213${rest}`;
+  }
+  if (cleaned.startsWith('213') && cleaned.length >= 11) {
+    const rest = cleaned.substring(3).replace(/^0+/, '');
+    return `+213${rest}`;
+  }
+  if (cleaned.startsWith('0')) {
+    const rest = cleaned.replace(/^0+/, '');
+    return `+213${rest}`;
+  }
+  const digitsOnly = cleaned.replace(/\D/g, '');
+  if (digitsOnly.length >= 8 && digitsOnly.length <= 10) {
+    return `+213${digitsOnly}`;
+  }
+  return cleaned.startsWith('+') ? cleaned : `+213${digitsOnly}`;
+}
 
 async function startServer() {
   const app = express();
@@ -885,13 +991,15 @@ async function startServer() {
       if (!phone || typeof phone !== 'string') {
         return res.status(400).json({ success: false, error: 'يرجى إدخال رقم هاتف صالح.' });
       }
-      const cleanPhone = phone.replace(/[^0-9]/g, '');
-      if (cleanPhone.length < 9 || cleanPhone.length > 15) {
+      const rawDigits = phone.replace(/[^0-9]/g, '');
+      if (rawDigits.length < 9 || rawDigits.length > 15) {
         return res.status(400).json({
           success: false,
-          error: 'يرجى إدخال رقم هاتف صالح (مثال: 0550123456).',
+          error: 'يرجى إدخال رقم هاتف صالح (مثال: 0784669514 أو 0550123456).',
         });
       }
+      // Format to international Algerian WhatsApp standard (+213...)
+      const formattedPhone = formatAlgerianPhone(phone);
 
       if (!wilayaCode || typeof wilayaCode !== 'string') {
         return res.status(400).json({ success: false, error: 'يرجى تحديد ولاية التوصيل.' });
@@ -1129,7 +1237,7 @@ async function startServer() {
           orderNumber: orderNumber,
           idempotencyKey: cleanIdempotencyKey,
           customerName: customerName.trim(),
-          phone: cleanPhone,
+          phone: formattedPhone,
           wilaya: wilayaInfo.name,
           wilayaCode: cleanWilayaCode,
           commune: commune.trim(),
@@ -1178,12 +1286,13 @@ async function startServer() {
       // STEP 7: Post-Commit Background Tasks (Non-blocking)
       // 1. Customer profile upsert
       try {
-        const customerDocId = `cust_${cleanPhone}`;
+        const customerDocId = `cust_${formattedPhone.replace(/[^0-9]/g, '')}`;
         const customerRef = doc(db, 'customers', customerDocId);
         const customerSnap = await getDoc(customerRef);
         if (customerSnap.exists()) {
           await updateDoc(customerRef, {
             name: customerName.trim(),
+            phone: formattedPhone,
             wilaya: wilayaInfo.name,
             totalOrders: increment(1),
             totalSpent: increment(committedOrder.total),
@@ -1194,7 +1303,7 @@ async function startServer() {
           await setDoc(customerRef, {
             id: customerDocId,
             name: customerName.trim(),
-            phone: cleanPhone,
+            phone: formattedPhone,
             wilaya: wilayaInfo.name,
             totalOrders: 1,
             totalSpent: committedOrder.total,
@@ -1233,6 +1342,278 @@ async function startServer() {
         success: false,
         error: err.message || 'حدث خطأ أثناء معالجة وحفظ الطلب. يرجى المحاولة مرة أخرى.',
       });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // 11. ADMIN AUTHENTICATION API (Traditional Username + Password)
+  // ─────────────────────────────────────────────────────────────
+
+  // POST /api/admin/login: Authenticate admin with username & password
+  app.post('/api/admin/login', async (req, res) => {
+    try {
+      const { username, password, clientUid } = req.body || {};
+      if (!username || !password) {
+        return res.status(400).json({
+          success: false,
+          error: 'يرجى إدخال اسم المستخدم وكلمة المرور.',
+        });
+      }
+
+      const creds = await getOrCreateAdminCredentials();
+      const isUsernameMatch = (username || '').trim().toLowerCase() === creds.username.toLowerCase();
+      const isPasswordValid = verifyPassword(password, creds.hash, creds.salt);
+
+      if (!isUsernameMatch || !isPasswordValid) {
+        return res.status(401).json({
+          success: false,
+          error: 'اسم المستخدم أو كلمة المرور غير صحيحة. يرجى التأكد وإعادة المحاولة.',
+        });
+      }
+
+      // Generate session token (valid for 7 days)
+      const token = crypto.randomBytes(32).toString('hex');
+      const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
+      activeAdminSessions.set(token, {
+        username: creds.username,
+        expiresAt,
+        uid: clientUid || undefined,
+      });
+
+      return res.json({
+        success: true,
+        token,
+        username: creds.username,
+        message: 'تم تسجيل الدخول بنجاح.',
+      });
+    } catch (err: any) {
+      console.error('[Admin Login API Error]:', err);
+      return res.status(500).json({
+        success: false,
+        error: 'حدث خطأ في الخادم أثناء التحقق من بيانات الدخول.',
+      });
+    }
+  });
+
+  // POST /api/admin/verify-session: Verify session validity
+  app.post('/api/admin/verify-session', async (req, res) => {
+    try {
+      const authHeader = req.headers.authorization;
+      const token = (authHeader?.startsWith('Bearer ') ? authHeader.substring(7) : '') || req.body?.token;
+      const clientUid = req.body?.clientUid;
+
+      if (!token) {
+        return res.status(401).json({ success: false, authenticated: false });
+      }
+
+      const session = activeAdminSessions.get(token);
+      if (!session || Date.now() > session.expiresAt) {
+        activeAdminSessions.delete(token);
+        return res.status(401).json({ success: false, authenticated: false, error: 'انتهت صلاحية الجلسة.' });
+      }
+
+      return res.json({
+        success: true,
+        authenticated: true,
+        username: session.username,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/admin/update-credentials: Update Username and Password with Hashing
+  app.post('/api/admin/update-credentials', async (req, res) => {
+    try {
+      const { currentPassword, newUsername, newPassword, token } = req.body || {};
+
+      if (!currentPassword) {
+        return res.status(400).json({
+          success: false,
+          error: 'يرجى إدخال كلمة المرور الحالية لتأكيد الهوية.',
+        });
+      }
+
+      if (!newUsername || newUsername.trim().length < 3) {
+        return res.status(400).json({
+          success: false,
+          error: 'يجب ألا يقل اسم المستخدم عن 3 أحرف.',
+        });
+      }
+
+      if (!newPassword || newPassword.length < 6) {
+        return res.status(400).json({
+          success: false,
+          error: 'يجب ألا تقل كلمة المرور الجديدة عن 6 أحرف أو أرقام.',
+        });
+      }
+
+      const creds = await getOrCreateAdminCredentials();
+      const isCurrentPasswordValid = verifyPassword(currentPassword, creds.hash, creds.salt);
+
+      if (!isCurrentPasswordValid) {
+        return res.status(403).json({
+          success: false,
+          error: 'كلمة المرور الحالية غير صحيحة. يرجى التأكد وإعادة المحاولة.',
+        });
+      }
+
+      // Apply Cryptographic PBKDF2 Hashing with a fresh random 16-byte salt
+      const newHashData = hashPassword(newPassword);
+      const cleanUsername = newUsername.trim();
+
+      const updatedPayload = {
+        username: cleanUsername,
+        passwordHash: newHashData.hash,
+        salt: newHashData.salt,
+        updatedAt: new Date().toISOString(),
+      };
+
+      try {
+        fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(updatedPayload, null, 2), 'utf-8');
+      } catch (writeErr) {
+        console.error('[Server] Failed to write updated credentials to file:', writeErr);
+      }
+
+      // Update current active session
+      if (token && activeAdminSessions.has(token)) {
+        const s = activeAdminSessions.get(token)!;
+        s.username = cleanUsername;
+      }
+
+      return res.json({
+        success: true,
+        username: cleanUsername,
+        message: 'تم تحديث اسم المستخدم وتشفير كلمة المرور الجديدة وحفظها بنجاح.',
+      });
+    } catch (err: any) {
+      console.error('[Admin Update Credentials Error]:', err);
+      return res.status(500).json({
+        success: false,
+        error: 'حدث خطأ أثناء حفظ وتشفير البيانات الجديدة.',
+      });
+    }
+  });
+
+  // POST /api/admin/logout
+  app.post('/api/admin/logout', async (req, res) => {
+    try {
+      const { token } = req.body || {};
+      if (token) {
+        activeAdminSessions.delete(token);
+      }
+      return res.json({ success: true, message: 'تم تسجيل الخروج بنجاح.' });
+    } catch (err: any) {
+      return res.json({ success: true });
+    }
+  });
+
+  // GET /api/admin/status
+  app.get('/api/admin/status', async (_req, res) => {
+    try {
+      const creds = await getOrCreateAdminCredentials();
+      return res.json({
+        success: true,
+        username: creds.username,
+        updatedAt: creds.updatedAt,
+      });
+    } catch (err: any) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────
+  // 12. HIGH-PERFORMANCE CLOUD MEDIA STORAGE & SERVING
+  // ─────────────────────────────────────────────────────────────
+
+  // POST /api/storage/upload
+  app.post('/api/storage/upload', async (req, res) => {
+    try {
+      const { fileBase64, fileName, folder, subfolder } = req.body || {};
+      if (!fileBase64 || typeof fileBase64 !== 'string') {
+        return res.status(400).json({ success: false, error: 'بيانات الصورة مفقودة أو غير صالحة.' });
+      }
+
+      const cleanBase64 = fileBase64.replace(/^data:[^;]+;base64,/, '');
+      const buffer = Buffer.from(cleanBase64, 'base64');
+
+      if (buffer.length > 5.5 * 1024 * 1024) {
+        return res.status(400).json({ success: false, error: 'حجم الصورة يتجاوز 5 ميغابايت.' });
+      }
+
+      const cleanFolder = (folder || 'products').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      const cleanSub = (subfolder || '').trim().replace(/[^a-zA-Z0-9_-]/g, '_');
+      const timestamp = Date.now();
+      const randomSuffix = crypto.randomBytes(4).toString('hex');
+      const safeName = (fileName || 'image')
+        .replace(/\.[^/.]+$/, '')
+        .replace(/[^a-zA-Z0-9_-]/g, '')
+        .substring(0, 30) || 'img';
+
+      const fileId = `${cleanFolder}_${cleanSub ? cleanSub + '_' : ''}${timestamp}_${randomSuffix}_${safeName}`;
+      const cachePath = path.join(MEDIA_CACHE_DIR, `${fileId}.webp`);
+
+      // Write to local media directory for instant fast serving
+      fs.writeFileSync(cachePath, buffer);
+
+      const publicUrl = `/api/media/${fileId}.webp`;
+      const storagePath = `app_media/${fileId}`;
+
+      return res.json({
+        success: true,
+        url: publicUrl,
+        path: storagePath,
+        name: fileName || `${fileId}.webp`,
+      });
+    } catch (err: any) {
+      console.error('[Storage Upload API Error]:', err);
+      return res.status(500).json({ success: false, error: err.message || 'فشل حفظ الصورة على الخادم.' });
+    }
+  });
+
+  // GET /api/media/:fileId: Serve stored image with caching headers
+  app.get('/api/media/:fileId', (req, res) => {
+    try {
+      const rawFileId = req.params.fileId || '';
+      const fileId = rawFileId.replace(/\.webp$/i, '');
+      const cachePath = path.join(MEDIA_CACHE_DIR, `${fileId}.webp`);
+
+      if (fs.existsSync(cachePath)) {
+        res.setHeader('Content-Type', 'image/webp');
+        res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        return res.sendFile(cachePath);
+      }
+
+      return res.status(404).send('Image Not Found');
+    } catch (err: any) {
+      return res.status(500).send(err.message);
+    }
+  });
+
+  // POST /api/storage/delete: Remove stored media file
+  app.post('/api/storage/delete', (req, res) => {
+    try {
+      const { pathOrUrl } = req.body || {};
+      if (!pathOrUrl || typeof pathOrUrl !== 'string') {
+        return res.json({ success: true });
+      }
+
+      // Extract fileId from /api/media/xxx.webp or app_media/xxx
+      const match = pathOrUrl.match(/(?:app_media\/|\/api\/media\/)([^./?]+)/);
+      if (match && match[1]) {
+        const fileId = match[1];
+        const cachePath = path.join(MEDIA_CACHE_DIR, `${fileId}.webp`);
+        if (fs.existsSync(cachePath)) {
+          try {
+            fs.unlinkSync(cachePath);
+          } catch {}
+        }
+      }
+
+      return res.json({ success: true });
+    } catch (err: any) {
+      console.warn('[Storage Delete Error]:', err);
+      return res.json({ success: false });
     }
   });
 

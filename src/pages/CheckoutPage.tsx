@@ -18,6 +18,7 @@ import { db } from '../firebase';
 import confetti from 'canvas-confetti';
 import { getMainImageUrl, handleImageError } from '../services/storageService';
 import { submitOrderSafely, generateOrderIdempotencyKey } from '../services/orderService';
+import { formatAlgerianPhone } from '../utils/phoneUtils';
 
 interface CheckoutPageProps {
   directItem?: import('../types').CartItem | null;
@@ -190,11 +191,12 @@ export const CheckoutPage: React.FC<CheckoutPageProps> = ({
     }
 
     // Algerian phone validation (starts with 05, 06, or 07 and 10 digits)
-    const cleanPhone = phone.replace(/[^0-9]/g, '');
-    if (cleanPhone.length < 9) {
-      setErrorMessage('يرجى إدخال رقم هاتف صالح (مثال: 0550123456).');
+    const rawDigits = phone.replace(/[^0-9]/g, '');
+    if (rawDigits.length < 9) {
+      setErrorMessage('يرجى إدخال رقم هاتف صالح (مثال: 0784669514).');
       return;
     }
+    const formattedPhone = formatAlgerianPhone(phone);
 
     if (!commune.trim()) {
       setErrorMessage('يرجى تحديد البلدية.');
@@ -240,7 +242,7 @@ export const CheckoutPage: React.FC<CheckoutPageProps> = ({
           quantity: Math.max(1, it.quantity || 1),
         })),
         customerName: customerName.trim(),
-        phone: cleanPhone,
+        phone: formattedPhone,
         wilayaCode: selectedWilayaCode,
         commune: commune.trim(),
         address: address.trim(),
@@ -387,19 +389,19 @@ export const CheckoutPage: React.FC<CheckoutPageProps> = ({
               {/* Phone Number */}
               <div>
                 <label className="block text-xs font-bold text-neutral-900 mb-1.5">
-                  رقم الهاتف (Numéro de téléphone) *
+                  رقم الهاتف (واتساب / WhatsApp) *
                 </label>
                 <input
                   type="tel"
                   required
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
-                  placeholder="05 / 06 / 07 XX XX XX XX"
+                  placeholder="مثال: 0784669514 أو 05 / 06 XX XX XX XX"
                   className="w-full px-4 py-3 bg-neutral-50 border border-neutral-200 rounded-xl text-xs sm:text-sm font-mono focus:outline-none focus:border-black transition-colors"
                   dir="ltr"
                 />
-                <span className="text-[11px] text-neutral-400 mt-1 block">
-                  سيتصل بك موظف التوصيل على هذا الرقم لتسليمك الطرد.
+                <span className="text-[11px] text-neutral-500 mt-1 block">
+                  سيتم حفظ الرقم بصيغة واتساب الدولية (+213...) للتواصل السريع وتأكيد الشحنة.
                 </span>
               </div>
 

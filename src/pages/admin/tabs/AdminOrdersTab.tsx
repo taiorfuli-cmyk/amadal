@@ -41,6 +41,7 @@ import { doc, updateDoc, deleteDoc, runTransaction, setDoc } from 'firebase/fire
 import { db } from '../../../firebase';
 import { useStore } from '../../../context/StoreContext';
 import { sendOrderToAnderson } from '../../../services/andersonService';
+import { formatAlgerianPhone, getWhatsAppNumber } from '../../../utils/phoneUtils';
 import {
   AMADAL_ORDER_STATUSES,
   DELIVERY_SHIPPING_STATUSES,
@@ -771,9 +772,9 @@ export const AdminOrdersTab: React.FC<AdminOrdersTabProps> = ({
                       {/* Customer Name & Phone */}
                       <td className="py-3.5 px-4">
                         <span className="font-bold text-neutral-900 block">{o.customerName}</span>
-                        <div className="flex items-center gap-1 text-[11px] text-neutral-500 font-mono" dir="ltr">
+                        <div className="flex items-center gap-1.5 text-[11px] text-neutral-600 font-mono" dir="ltr">
                           <a
-                            href={`https://wa.me/${o.phone.replace(/[^0-9]/g, '')}`}
+                            href={`https://wa.me/${getWhatsAppNumber(o.phone)}`}
                             target="_blank"
                             rel="noreferrer"
                             onClick={(e) => e.stopPropagation()}
@@ -782,7 +783,7 @@ export const AdminOrdersTab: React.FC<AdminOrdersTabProps> = ({
                           >
                             <MessageCircle className="w-3 h-3" />
                           </a>
-                          <span>{o.phone}</span>
+                          <span>{formatAlgerianPhone(o.phone)}</span>
                         </div>
                       </td>
 
@@ -1149,7 +1150,7 @@ export const AdminOrdersTab: React.FC<AdminOrdersTabProps> = ({
                     <h4 className="font-bold text-xs text-neutral-900">بيانات العميل والتوصيل</h4>
                     <div className="flex items-center gap-2">
                       <a
-                        href={`https://wa.me/${selectedOrder.phone.replace(/[^0-9]/g, '')}?text=${encodeURIComponent(
+                        href={`https://wa.me/${getWhatsAppNumber(selectedOrder.phone)}?text=${encodeURIComponent(
                           `مرحبًا ${selectedOrder.customerName}، معك فريق AMADAL بخصوص طلبك رقم ${selectedOrder.orderNumber}.`
                         )}`}
                         target="_blank"
@@ -1172,7 +1173,7 @@ export const AdminOrdersTab: React.FC<AdminOrdersTabProps> = ({
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs text-neutral-700">
                     <p><strong>الاسم:</strong> {selectedOrder.customerName}</p>
-                    <p><strong>الهاتف:</strong> <span className="font-mono">{selectedOrder.phone}</span></p>
+                    <p><strong>الهاتف:</strong> <span className="font-mono font-bold text-neutral-900">{formatAlgerianPhone(selectedOrder.phone)}</span></p>
                     <p><strong>الولاية:</strong> {selectedOrder.wilaya}</p>
                     <p><strong>البلدية:</strong> {selectedOrder.commune}</p>
                     <p className="sm:col-span-2"><strong>العنوان:</strong> {selectedOrder.address}</p>
