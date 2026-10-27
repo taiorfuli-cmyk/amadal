@@ -60,7 +60,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
       if (res.ok) {
         const data = await res.json();
-        if (data.valid) {
+        if (data.authenticated || data.valid || data.success) {
           setIsAdmin(true);
           setAdminUsername(data.username || storedUser || 'admin');
           setIsLoading(false);
@@ -97,23 +97,26 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<{ success: boolean; error?: string }> => {
     try {
       setIsLoading(true);
+      const cleanUsername = username.trim();
+      console.log(`[AuthContext] Logging in with username: "${cleanUsername}"`);
 
       const res = await fetch('/api/admin/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          username: username.trim(),
+          username: cleanUsername,
           password,
         }),
       });
 
       const data = await res.json();
+      console.log('[AuthContext] Login response:', data);
 
       if (data.success && data.token) {
         localStorage.setItem(TOKEN_STORAGE_KEY, data.token);
-        localStorage.setItem(USERNAME_STORAGE_KEY, data.username || username.trim());
+        localStorage.setItem(USERNAME_STORAGE_KEY, data.username || cleanUsername);
         setIsAdmin(true);
-        setAdminUsername(data.username || username.trim());
+        setAdminUsername(data.username || cleanUsername);
         return { success: true };
       }
 
@@ -122,7 +125,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         error: data.error || 'اسم المستخدم أو كلمة المرور غير صحيحة.',
       };
     } catch (error: any) {
-      console.error('Login error:', error);
+      console.error('[AuthContext] Login error:', error);
       return {
         success: false,
         error: error.message || 'تعذر الاتصال بالخادم للتحقق من بيانات الدخول.',
@@ -139,6 +142,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   ): Promise<{ success: boolean; error?: string }> => {
     try {
       const token = localStorage.getItem(TOKEN_STORAGE_KEY);
+      const cleanUser = newUsername?.trim();
+      console.log('[AuthContext] Submitting update credentials:', {
+        hasToken: Boolean(token),
+        newUsername: cleanUser || '(not changed)',
+        hasNewPassword: Boolean(newPassword),
+      });
+
       const res = await fetch('/api/admin/update-credentials', {
         method: 'POST',
         headers: {
@@ -148,12 +158,13 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         body: JSON.stringify({
           token,
           currentPassword,
-          newUsername: newUsername?.trim(),
-          newPassword,
+          newUsername: cleanUser || undefined,
+          newPassword: newPassword ? newPassword : undefined,
         }),
       });
 
       const data = await res.json();
+      console.log('[AuthContext] Update credentials response:', data);
 
       if (data.success) {
         if (data.username) {
@@ -168,7 +179,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         error: data.error || 'فشل تحديث بيانات الدخول.',
       };
     } catch (error: any) {
-      console.error('Update credentials error:', error);
+      console.error('[AuthContext] Update credentials error:', error);
       return {
         success: false,
         error: error.message || 'حدث خطأ أثناء تحديث بيانات الدخول.',

@@ -70,34 +70,108 @@ function verifyPassword(password: string, hash: string, salt: string): boolean {
 const activeAdminSessions = new Map<string, { username: string; expiresAt: number; uid?: string }>();
 const ADMIN_CREDENTIALS_FILE = path.join(__dirname, '.admin_credentials.json');
 
-// Helper to retrieve or initialize default admin credentials (admin / admin123)
-async function getOrCreateAdminCredentials(): Promise<{ username: string; hash: string; salt: string; updatedAt: string }> {
+// Helper to retrieve or initialize admin credentials from Firestore database (collection 'admins')
+// with fallback to local file backup and default bootstrap (admin / admin123)
+async function getAdminCredentials(lookupUsername?: string): Promise<{ username: string; hash: string; salt: string; updatedAt: string }> {
+  // 1. If lookupUsername is provided, query Firestore for matching username (case-insensitive)
+  if (lookupUsername && typeof lookupUsername === 'string') {
+    try {
+      const cleanLookup = lookupUsername.trim().toLowerCase();
+      const adminsRef = collection(db, 'admins');
+      const q = query(adminsRef, where('username_lower', '==', cleanLookup));
+      const qSnap = await getDocs(q);
+      if (!qSnap.empty) {
+        const docData = qSnap.docs[0].data();
+        if (docData.passwordHash && docData.salt) {
+          return {
+            username: docData.username || lookupUsername,
+            hash: docData.passwordHash,
+            salt: docData.salt,
+            updatedAt: docData.updatedAt || new Date().toISOString(),
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('[Server] Error querying admins by username from Firestore:', e);
+    }
+  }
+
+  // 2. Fetch main admin document from Firestore: /admins/main_admin
   try {
-    if (fs.existsSync(ADMIN_CREDENTIALS_FILE)) {
-      const raw = fs.readFileSync(ADMIN_CREDENTIALS_FILE, 'utf-8');
-      const data = JSON.parse(raw);
+    const mainAdminRef = doc(db, 'admins', 'main_admin');
+    const snap = await getDoc(mainAdminRef);
+    if (snap.exists()) {
+      const data = snap.data();
       if (data.passwordHash && data.salt) {
-        return {
+        const creds = {
           username: data.username || 'admin',
           hash: data.passwordHash,
           salt: data.salt,
           updatedAt: data.updatedAt || new Date().toISOString(),
         };
+        // Keep local backup in sync
+        try {
+          fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(data, null, 2), 'utf-8');
+        } catch {}
+        return creds;
+      }
+    }
+  } catch (err) {
+    console.warn('[Server] Notice reading admin credentials from Firestore:', err);
+  }
+
+  // 3. Fallback to local persistent backup file
+  try {
+    if (fs.existsSync(ADMIN_CREDENTIALS_FILE)) {
+      const raw = fs.readFileSync(ADMIN_CREDENTIALS_FILE, 'utf-8');
+      const data = JSON.parse(raw);
+      if (data.passwordHash && data.salt) {
+        const creds = {
+          username: data.username || 'admin',
+          hash: data.passwordHash,
+          salt: data.salt,
+          updatedAt: data.updatedAt || new Date().toISOString(),
+        };
+        // Try syncing to Firestore in the background
+        try {
+          const mainAdminRef = doc(db, 'admins', 'main_admin');
+          await setDoc(
+            mainAdminRef,
+            {
+              username: creds.username,
+              username_lower: creds.username.toLowerCase(),
+              passwordHash: creds.hash,
+              salt: creds.salt,
+              updatedAt: creds.updatedAt,
+            },
+            { merge: true }
+          );
+        } catch {}
+        return creds;
       }
     }
   } catch (err) {
     console.warn('[Server] Error reading local admin credentials file:', err);
   }
 
-  // Initial Bootstrap: admin / admin123
+  // 4. Initial Bootstrap: admin / admin123
   const initial = hashPassword('admin123');
   const initialDoc = {
     username: 'admin',
+    username_lower: 'admin',
     passwordHash: initial.hash,
     salt: initial.salt,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
+
+  try {
+    const mainAdminRef = doc(db, 'admins', 'main_admin');
+    await setDoc(mainAdminRef, initialDoc, { merge: true });
+    console.log('[Server] Initialized default admin credentials in Firestore.');
+  } catch (e) {
+    console.warn('[Server] Notice saving initial admin credentials to Firestore:', e);
+  }
 
   try {
     fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(initialDoc, null, 2), 'utf-8');
@@ -112,6 +186,9 @@ async function getOrCreateAdminCredentials(): Promise<{ username: string; hash: 
     updatedAt: initialDoc.updatedAt,
   };
 }
+
+// Backward compatibility alias
+const getOrCreateAdminCredentials = getAdminCredentials;
 
 const DEFAULT_ANDERSON_BASE_URL = 'https://anderson.ecotrack.dz/';
 
@@ -208,7 +285,17 @@ function formatAlgerianPhone(phone: string): string {
 
 async function startServer() {
   const app = express();
-  const PORT = Number(process.env.PORT) || 3000;
+
+  // In development, AI Studio dev server must run on port 3000.
+  // Parse CLI --port argument if provided by runner, otherwise enforce 3000 in dev.
+  const portArgIndex = process.argv.findIndex((arg) => arg === '--port' || arg === '-p');
+  let PORT = 3000;
+  if (portArgIndex !== -1 && process.argv[portArgIndex + 1]) {
+    const parsed = parseInt(process.argv[portArgIndex + 1], 10);
+    if (!isNaN(parsed) && parsed > 0) PORT = parsed;
+  } else if (process.env.NODE_ENV === 'production' && process.env.PORT) {
+    PORT = Number(process.env.PORT) || 3000;
+  }
 
   app.use(express.json({ limit: '30mb' }));
   app.use(express.urlencoded({ limit: '30mb', extended: true }));
@@ -1319,7 +1406,7 @@ async function startServer() {
       try {
         const andersonSettings = await getStoredAndersonSettings();
         if (andersonSettings.enabled && andersonSettings.autoSendOrders && andersonSettings.apiToken) {
-          const selfUrl = `http://localhost:${process.env.PORT || 3000}/api/anderson/send-order`;
+          const selfUrl = `http://localhost:${PORT}/api/anderson/send-order`;
           fetch(selfUrl, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1353,18 +1440,30 @@ async function startServer() {
   app.post('/api/admin/login', async (req, res) => {
     try {
       const { username, password, clientUid } = req.body || {};
-      if (!username || !password) {
+      const cleanUsername = typeof username === 'string' ? username.trim() : '';
+
+      console.log(`[Admin Login API] Login attempt for username: "${cleanUsername}"`);
+
+      if (!cleanUsername || !password) {
         return res.status(400).json({
           success: false,
           error: 'يرجى إدخال اسم المستخدم وكلمة المرور.',
         });
       }
 
-      const creds = await getOrCreateAdminCredentials();
-      const isUsernameMatch = (username || '').trim().toLowerCase() === creds.username.toLowerCase();
+      // 1. Fetch credentials by username from Firestore or fallback
+      const creds = await getAdminCredentials(cleanUsername);
+      const isUsernameMatch = cleanUsername.toLowerCase() === creds.username.toLowerCase();
       const isPasswordValid = verifyPassword(password, creds.hash, creds.salt);
 
+      console.log(`[Admin Login API] Verification check for "${cleanUsername}":`, {
+        storedUsername: creds.username,
+        isUsernameMatch,
+        isPasswordValid,
+      });
+
       if (!isUsernameMatch || !isPasswordValid) {
+        console.warn(`[Admin Login API] Authentication failed for username: "${cleanUsername}"`);
         return res.status(401).json({
           success: false,
           error: 'اسم المستخدم أو كلمة المرور غير صحيحة. يرجى التأكد وإعادة المحاولة.',
@@ -1379,6 +1478,8 @@ async function startServer() {
         expiresAt,
         uid: clientUid || undefined,
       });
+
+      console.log(`[Admin Login API] Login success for admin "${creds.username}". Session token issued.`);
 
       return res.json({
         success: true,
@@ -1403,18 +1504,19 @@ async function startServer() {
       const clientUid = req.body?.clientUid;
 
       if (!token) {
-        return res.status(401).json({ success: false, authenticated: false });
+        return res.status(401).json({ success: false, authenticated: false, valid: false });
       }
 
       const session = activeAdminSessions.get(token);
       if (!session || Date.now() > session.expiresAt) {
         activeAdminSessions.delete(token);
-        return res.status(401).json({ success: false, authenticated: false, error: 'انتهت صلاحية الجلسة.' });
+        return res.status(401).json({ success: false, authenticated: false, valid: false, error: 'انتهت صلاحية الجلسة.' });
       }
 
       return res.json({
         success: true,
         authenticated: true,
+        valid: true,
         username: session.username,
       });
     } catch (err: any) {
@@ -1422,75 +1524,123 @@ async function startServer() {
     }
   });
 
-  // POST /api/admin/update-credentials: Update Username and Password with Hashing
+  // POST /api/admin/update-credentials: Update Username and/or Password with Cryptographic Hashing and Firestore Database Commit
   app.post('/api/admin/update-credentials', async (req, res) => {
     try {
       const { currentPassword, newUsername, newPassword, token } = req.body || {};
 
-      if (!currentPassword) {
+      console.log('[Admin Security] Update credentials request received:', {
+        hasCurrentPassword: Boolean(currentPassword),
+        newUsername: newUsername || '(not provided)',
+        hasNewPassword: Boolean(newPassword),
+      });
+
+      if (!currentPassword || typeof currentPassword !== 'string') {
         return res.status(400).json({
           success: false,
           error: 'يرجى إدخال كلمة المرور الحالية لتأكيد الهوية.',
         });
       }
 
-      if (!newUsername || newUsername.trim().length < 3) {
-        return res.status(400).json({
-          success: false,
-          error: 'يجب ألا يقل اسم المستخدم عن 3 أحرف.',
-        });
-      }
-
-      if (!newPassword || newPassword.length < 6) {
-        return res.status(400).json({
-          success: false,
-          error: 'يجب ألا تقل كلمة المرور الجديدة عن 6 أحرف أو أرقام.',
-        });
-      }
-
-      const creds = await getOrCreateAdminCredentials();
+      // Step 1: Read current authentic credentials from Firestore / backup
+      const creds = await getAdminCredentials();
       const isCurrentPasswordValid = verifyPassword(currentPassword, creds.hash, creds.salt);
 
       if (!isCurrentPasswordValid) {
+        console.warn('[Admin Security] Update credentials rejected: Current password verification failed.');
         return res.status(403).json({
           success: false,
           error: 'كلمة المرور الحالية غير صحيحة. يرجى التأكد وإعادة المحاولة.',
         });
       }
 
-      // Apply Cryptographic PBKDF2 Hashing with a fresh random 16-byte salt
-      const newHashData = hashPassword(newPassword);
-      const cleanUsername = newUsername.trim();
+      let finalUsername = creds.username;
+      let finalHash = creds.hash;
+      let finalSalt = creds.salt;
+      let changedAny = false;
 
+      // Step 2: Handle new username if provided
+      if (typeof newUsername === 'string' && newUsername.trim()) {
+        const cleanUsername = newUsername.trim();
+        if (cleanUsername.length < 3) {
+          return res.status(400).json({
+            success: false,
+            error: 'يجب ألا يقل اسم المستخدم عن 3 أحرف.',
+          });
+        }
+        if (cleanUsername !== creds.username) {
+          finalUsername = cleanUsername;
+          changedAny = true;
+        }
+      }
+
+      // Step 3: Handle new password if provided
+      if (typeof newPassword === 'string' && newPassword.trim()) {
+        if (newPassword.length < 6) {
+          return res.status(400).json({
+            success: false,
+            error: 'يجب ألا تقل كلمة المرور الجديدة عن 6 أحرف أو أرقام.',
+          });
+        }
+        const newHashData = hashPassword(newPassword);
+        finalHash = newHashData.hash;
+        finalSalt = newHashData.salt;
+        changedAny = true;
+      }
+
+      if (!changedAny) {
+        return res.status(400).json({
+          success: false,
+          error: 'لم يتم إدخال أي تعديل جديد (اسم المستخدم وكلمة المرور مطابقة للبيانات الحالية).',
+        });
+      }
+
+      const nowIso = new Date().toISOString();
       const updatedPayload = {
-        username: cleanUsername,
-        passwordHash: newHashData.hash,
-        salt: newHashData.salt,
-        updatedAt: new Date().toISOString(),
+        username: finalUsername,
+        username_lower: finalUsername.toLowerCase(),
+        passwordHash: finalHash,
+        salt: finalSalt,
+        updatedAt: nowIso,
       };
 
+      // Step 4: Commit to Firestore database (admins collection)
+      try {
+        const adminDocRef = doc(db, 'admins', 'main_admin');
+        await setDoc(adminDocRef, updatedPayload, { merge: true });
+        console.log('[Admin Security] Committed updated credentials to Firestore database successfully.');
+      } catch (dbErr) {
+        console.error('[Admin Security] Error committing to Firestore admins collection:', dbErr);
+      }
+
+      // Step 5: Save local file backup for instant redundancy
       try {
         fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(updatedPayload, null, 2), 'utf-8');
+        console.log('[Admin Security] Saved credentials backup to local file successfully.');
       } catch (writeErr) {
         console.error('[Server] Failed to write updated credentials to file:', writeErr);
       }
 
-      // Update current active session
-      if (token && activeAdminSessions.has(token)) {
-        const s = activeAdminSessions.get(token)!;
-        s.username = cleanUsername;
+      // Step 6: Update active session token if present
+      const effectiveToken = (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.substring(7) : '') || token;
+      if (effectiveToken && activeAdminSessions.has(effectiveToken)) {
+        const s = activeAdminSessions.get(effectiveToken)!;
+        s.username = finalUsername;
       }
+
+      console.log(`[Admin Security] Successfully committed new credentials for "${finalUsername}".`);
 
       return res.json({
         success: true,
-        username: cleanUsername,
-        message: 'تم تحديث اسم المستخدم وتشفير كلمة المرور الجديدة وحفظها بنجاح.',
+        username: finalUsername,
+        updatedAt: nowIso,
+        message: 'تم تحديث اسم المستخدم وتشفير كلمة المرور الجديدة وحفظها في قاعدة البيانات بنجاح.',
       });
     } catch (err: any) {
       console.error('[Admin Update Credentials Error]:', err);
       return res.status(500).json({
         success: false,
-        error: 'حدث خطأ أثناء حفظ وتشفير البيانات الجديدة.',
+        error: 'حدث خطأ أثناء حفظ وتشفير البيانات الجديدة في قاعدة البيانات.',
       });
     }
   });
@@ -1511,7 +1661,7 @@ async function startServer() {
   // GET /api/admin/status
   app.get('/api/admin/status', async (_req, res) => {
     try {
-      const creds = await getOrCreateAdminCredentials();
+      const creds = await getAdminCredentials();
       return res.json({
         success: true,
         username: creds.username,

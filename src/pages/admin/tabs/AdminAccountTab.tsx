@@ -113,17 +113,32 @@ export const AdminAccountTab: React.FC = () => {
       }
     }
 
+    const trimmedUser = newUsername.trim();
+    const hasPasswordChange = Boolean(newPassword && newPassword.trim());
+    const hasUsernameChange = trimmedUser !== currentUsername;
+
+    if (!hasPasswordChange && !hasUsernameChange) {
+      setErrorMessage('لم تقم بإجراء أي تعديل (اسم المستخدم وكلمة المرور مطابقة للبيانات الحالية).');
+      return;
+    }
+
     setIsSubmitting(true);
     try {
+      console.log('[AdminAccountTab] Submitting credential updates:', {
+        username: trimmedUser,
+        isUsernameChanged: hasUsernameChange,
+        isPasswordChanged: hasPasswordChange,
+      });
+
       const result = await updateCredentials(
         currentPassword,
-        newUsername.trim() !== currentUsername ? newUsername.trim() : undefined,
-        newPassword ? newPassword : undefined
+        trimmedUser,
+        hasPasswordChange ? newPassword : undefined
       );
 
       if (result.success) {
-        setSuccessMessage('تم تحديث بيانات الدخول وحفظها بنجاح مع تشفير PBKDF2 الآمن.');
-        setCurrentUsername(newUsername.trim());
+        setSuccessMessage('تم تحديث بيانات الدخول وحفظها في قاعدة البيانات بنجاح مع تشفير PBKDF2 الآمن.');
+        setCurrentUsername(trimmedUser);
         setCurrentPassword('');
         setNewPassword('');
         setConfirmPassword('');
@@ -132,6 +147,7 @@ export const AdminAccountTab: React.FC = () => {
         setErrorMessage(result.error || 'تعذر تحديث البيانات. يرجى التأكد من كلمة المرور الحالية.');
       }
     } catch (err: any) {
+      console.error('[AdminAccountTab] Submit error:', err);
       setErrorMessage(err.message || 'حدث خطأ غير متوقع أثناء معالجة الطلب.');
     } finally {
       setIsSubmitting(false);
