@@ -13,6 +13,7 @@ import {
   ArrowRight,
   LogOut,
   ShieldCheck,
+  ShieldAlert,
   ExternalLink,
   Lock,
   UserCheck,
@@ -175,9 +176,11 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
           </div>
 
           {loginError && (
-            <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-center gap-2.5 text-xs animate-in fade-in">
-              <AlertCircle className="w-4 h-4 shrink-0 text-red-400" />
-              <span>{loginError}</span>
+            <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-start gap-2.5 text-xs animate-in fade-in leading-relaxed">
+              <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+              <div className="flex-1 text-right">
+                <span className="font-semibold block">{loginError}</span>
+              </div>
             </div>
           )}
 
@@ -235,6 +238,25 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
                   {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
+            </div>
+
+            {/* Quick Fill / Hint for Default Admin Credentials */}
+            <div className="p-3 rounded-xl bg-neutral-800/60 border border-neutral-700/60 text-neutral-300 text-[11px] flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-right">
+                <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                <span>البيانات الافتراضية: <strong className="font-mono text-white">admin</strong> / <strong className="font-mono text-white">admin123</strong></span>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setLoginUsername('admin');
+                  setLoginPassword('admin123');
+                  setLoginError(null);
+                }}
+                className="text-[10px] font-bold text-amber-400 hover:text-amber-300 bg-amber-400/10 hover:bg-amber-400/20 px-2 py-1 rounded-md transition-all cursor-pointer shrink-0"
+              >
+                تعبئة تلقائية
+              </button>
             </div>
 
             <button

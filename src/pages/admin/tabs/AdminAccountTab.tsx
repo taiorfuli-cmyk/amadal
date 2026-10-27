@@ -15,6 +15,7 @@ import {
   Hash
 } from 'lucide-react';
 import { useAuth } from '../../../context/AuthContext';
+import { apiFetch } from '../../../utils/apiConfig';
 
 export const AdminAccountTab: React.FC = () => {
   const { adminUsername, updateCredentials } = useAuth();
@@ -43,9 +44,9 @@ export const AdminAccountTab: React.FC = () => {
   const fetchStatus = async () => {
     setIsFetchingStatus(true);
     try {
-      const res = await fetch('/api/admin/status');
-      if (res.ok) {
-        const data = await res.json();
+      const res = await apiFetch('/api/admin/status');
+      if (res.ok && res.data) {
+        const data = res.data;
         if (data.username) {
           setCurrentUsername(data.username);
           setNewUsername(data.username);

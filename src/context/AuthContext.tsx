@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
 import { User, onAuthStateChanged, signOut as fbSignOut } from 'firebase/auth';
 import { auth } from '../firebase';
+import { apiFetch } from '../utils/apiConfig';
 
 interface AuthContextType {
   currentUser: User | null;
@@ -48,18 +49,14 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         return;
       }
 
-      // Check with backend session verification endpoint
-      const res = await fetch('/api/admin/verify-session', {
+      // Check with backend session verification endpoint using dynamic apiFetch
+      const res = await apiFetch('/api/admin/verify-session', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${storedToken}`,
-        },
         body: JSON.stringify({ token: storedToken }),
       });
 
-      if (res.ok) {
-        const data = await res.json();
+      if (res.ok && res.data) {
+        const data = res.data;
         if (data.authenticated || data.valid || data.success) {
           setIsAdmin(true);
           setAdminUsername(data.username || storedUser || 'admin');
@@ -98,31 +95,30 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       setIsLoading(true);
       const cleanUsername = username.trim();
-      console.log(`[AuthContext] Logging in with username: "${cleanUsername}"`);
+      console.log(`[AuthContext] Logging in with username: "${cleanUsername}" via dynamic apiFetch...`);
 
-      const res = await fetch('/api/admin/login', {
+      const res = await apiFetch('/api/admin/login', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        skipAuth: true,
         body: JSON.stringify({
           username: cleanUsername,
           password,
         }),
       });
 
-      const data = await res.json();
-      console.log('[AuthContext] Login response:', data);
+      console.log('[AuthContext] Login response status:', res.status, res.data);
 
-      if (data.success && data.token) {
-        localStorage.setItem(TOKEN_STORAGE_KEY, data.token);
-        localStorage.setItem(USERNAME_STORAGE_KEY, data.username || cleanUsername);
+      if (res.ok && res.data?.success && res.data.token) {
+        localStorage.setItem(TOKEN_STORAGE_KEY, res.data.token);
+        localStorage.setItem(USERNAME_STORAGE_KEY, res.data.username || cleanUsername);
         setIsAdmin(true);
-        setAdminUsername(data.username || cleanUsername);
+        setAdminUsername(res.data.username || cleanUsername);
         return { success: true };
       }
 
       return {
         success: false,
-        error: data.error || 'اسم المستخدم أو كلمة المرور غير صحيحة.',
+        error: res.error || res.data?.error || 'اسم المستخدم أو كلمة المرور غير صحيحة.',
       };
     } catch (error: any) {
       console.error('[AuthContext] Login error:', error);
@@ -149,12 +145,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         hasNewPassword: Boolean(newPassword),
       });
 
-      const res = await fetch('/api/admin/update-credentials', {
+      const res = await apiFetch('/api/admin/update-credentials', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token || ''}`,
-        },
         body: JSON.stringify({
           token,
           currentPassword,
@@ -163,20 +155,19 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }),
       });
 
-      const data = await res.json();
-      console.log('[AuthContext] Update credentials response:', data);
+      console.log('[AuthContext] Update credentials response:', res.status, res.data);
 
-      if (data.success) {
-        if (data.username) {
-          setAdminUsername(data.username);
-          localStorage.setItem(USERNAME_STORAGE_KEY, data.username);
+      if (res.ok && res.data?.success) {
+        if (res.data.username) {
+          setAdminUsername(res.data.username);
+          localStorage.setItem(USERNAME_STORAGE_KEY, res.data.username);
         }
         return { success: true };
       }
 
       return {
         success: false,
-        error: data.error || 'فشل تحديث بيانات الدخول.',
+        error: res.error || res.data?.error || 'فشل تحديث بيانات الدخول.',
       };
     } catch (error: any) {
       console.error('[AuthContext] Update credentials error:', error);
@@ -192,9 +183,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     const clientUid = auth.currentUser?.uid;
 
     try {
-      await fetch('/api/admin/logout', {
+      await apiFetch('/api/admin/logout', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, clientUid }),
       });
     } catch {}
