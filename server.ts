@@ -1861,6 +1861,17 @@ async function startServer() {
   });
 
   // ─────────────────────────────────────────────────────────────
+  // Explicit API 404 Handler (Guarantees all /api/* requests return JSON, never HTML)
+  // ─────────────────────────────────────────────────────────────
+  app.all('/api/*', (req, res) => {
+    res.status(404).json({
+      success: false,
+      error: `المسار البرمجي غير موجود (${req.method} ${req.path})`,
+      path: req.path,
+    });
+  });
+
+  // ─────────────────────────────────────────────────────────────
   // Vite Integration (Dev Middleware / Prod Static Files)
   // ─────────────────────────────────────────────────────────────
   if (process.env.NODE_ENV !== 'production') {

@@ -1,4 +1,5 @@
 import { AndersonSettings } from '../types';
+import { apiFetch } from '../utils/apiConfig';
 
 export interface AndersonApiSettingsResponse {
   success: boolean;
@@ -36,12 +37,13 @@ export interface AndersonSendOrderResponse {
  * Fetch current Anderson settings from server (token is masked for security)
  */
 export async function getAndersonSettings(): Promise<AndersonApiSettingsResponse> {
-  const res = await fetch('/api/anderson/settings');
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || 'فشل جلب إعدادات Anderson');
+  const res = await apiFetch<AndersonApiSettingsResponse>('/api/anderson/settings', {
+    method: 'GET',
+  });
+  if (!res.ok || !res.data) {
+    throw new Error(res.error || 'فشل جلب إعدادات Anderson');
   }
-  return res.json();
+  return res.data;
 }
 
 /**
@@ -53,16 +55,14 @@ export async function saveAndersonSettings(data: {
   apiBaseUrl?: string;
   autoSendOrders?: boolean;
 }): Promise<{ success: boolean; message?: string; settings?: any; error?: string }> {
-  const res = await fetch('/api/anderson/settings', {
+  const res = await apiFetch('/api/anderson/settings', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
   });
-  const json = await res.json();
-  if (!res.ok) {
-    throw new Error(json.error || 'فشل حفظ الإعدادات');
+  if (!res.ok || !res.data) {
+    throw new Error(res.error || 'فشل حفظ الإعدادات');
   }
-  return json;
+  return res.data;
 }
 
 /**
@@ -72,13 +72,14 @@ export async function testAndersonConnection(
   apiToken?: string,
   apiBaseUrl?: string
 ): Promise<AndersonTestResponse> {
-  const res = await fetch('/api/anderson/test-connection', {
+  const res = await apiFetch<AndersonTestResponse>('/api/anderson/test-connection', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ apiToken, apiBaseUrl }),
   });
-  const json = await res.json().catch(() => ({ success: false, error: 'استجابة غير صحيحة من الخادم' }));
-  return json;
+  if (!res.ok || !res.data) {
+    return { success: false, error: res.error || 'استجابة غير صحيحة من الخادم' };
+  }
+  return res.data;
 }
 
 /**
@@ -88,23 +89,28 @@ export async function sendOrderToAnderson(
   orderId: string,
   force: boolean = false
 ): Promise<AndersonSendOrderResponse> {
-  const res = await fetch('/api/anderson/send-order', {
+  const res = await apiFetch<AndersonSendOrderResponse>('/api/anderson/send-order', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ orderId, force }),
   });
-  const json = await res.json().catch(() => ({ success: false, error: 'فشل الاتصال بالخادم' }));
-  return json;
+  if (!res.ok || !res.data) {
+    return { success: false, error: res.error || 'فشل الاتصال بالخادم' };
+  }
+  return res.data;
 }
 
 /**
  * Retry all orders that failed sending to Anderson
  */
 export async function retryAllFailedOrders(): Promise<{ success: boolean; count?: number; message?: string; error?: string }> {
-  const res = await fetch('/api/anderson/retry-all-failed', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-  });
-  const json = await res.json();
-  return json;
+  const res = await apiFetch<{ success: boolean; count?: number; message?: string; error?: string }>(
+    '/api/anderson/retry-all-failed',
+    {
+      method: 'POST',
+    }
+  );
+  if (!res.ok || !res.data) {
+    return { success: false, error: res.error || 'فشل إعادة المحاولة' };
+  }
+  return res.data;
 }

@@ -298,9 +298,16 @@ export async function uploadImageFile({
 
     onProgress?.(90);
 
-    const result = await response.json();
-    if (!response.ok || !result.success || !result.url) {
-      throw new Error(result.error || 'فشل رفع وحفظ الصورة في التخزين.');
+    const text = await response.text();
+    let result: any = null;
+    try {
+      result = JSON.parse(text);
+    } catch {
+      result = null;
+    }
+
+    if (!response.ok || !result?.success || !result?.url) {
+      throw new Error(result?.error || 'فشل رفع وحفظ الصورة في التخزين.');
     }
 
     onProgress?.(100);

@@ -149,7 +149,13 @@ export const CheckoutPage: React.FC<CheckoutPageProps> = ({
         }),
       });
 
-      const data = await res.json().catch(() => null);
+      const rawText = await res.text();
+      let data: any = null;
+      try {
+        data = JSON.parse(rawText);
+      } catch {
+        data = null;
+      }
 
       if (!res.ok || !data?.success) {
         setCouponError(data?.error || 'رمز القسيمة غير صالح أو منتهي الصلاحية');

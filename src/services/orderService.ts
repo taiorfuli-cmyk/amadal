@@ -392,8 +392,15 @@ export async function submitOrderSafely(params: CreateOrderParams): Promise<Orde
       body: JSON.stringify(params),
     });
 
+    const rawText = await response.text();
+    let data: any = null;
+    try {
+      data = JSON.parse(rawText);
+    } catch {
+      data = null;
+    }
+
     if (response.ok) {
-      const data = await response.json();
       if (data?.success && data?.order) {
         return data.order as Order;
       }
@@ -401,9 +408,8 @@ export async function submitOrderSafely(params: CreateOrderParams): Promise<Orde
         throw new Error(data.error);
       }
     } else {
-      const errorData = await response.json().catch(() => null);
-      if (errorData?.error) {
-        throw new Error(errorData.error);
+      if (data?.error) {
+        throw new Error(data.error);
       }
     }
   } catch (err: any) {

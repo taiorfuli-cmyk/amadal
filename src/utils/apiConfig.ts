@@ -42,7 +42,7 @@ export interface ApiFetchOptions extends RequestInit {
 export async function apiFetch<T = any>(
   endpoint: string,
   options: ApiFetchOptions = {}
-): Promise<{ ok: boolean; status: number; data?: T; error?: string }> {
+): Promise<{ ok: boolean; status: number; data?: T | null; error?: string }> {
   const url = getApiUrl(endpoint);
   const token = typeof window !== 'undefined' ? localStorage.getItem(TOKEN_STORAGE_KEY) : null;
 
@@ -66,34 +66,32 @@ export async function apiFetch<T = any>(
       credentials: 'include', // Guarantees cookies & credentials are transmitted across origins
     });
 
+    // Read raw text first to guarantee that HTML error pages never throw syntax errors
+    const rawText = await res.text();
     let data: any = null;
-    const contentType = res.headers.get('content-type') || '';
-    if (contentType.includes('application/json')) {
+    let isJson = false;
+
+    if (rawText && rawText.trim()) {
       try {
-        data = await res.json();
-      } catch (jsonErr) {
-        console.warn(`[apiFetch] Failed to parse JSON response from ${url}:`, jsonErr);
+        data = JSON.parse(rawText);
+        isJson = true;
+      } catch {
+        data = null;
       }
-    } else {
-      try {
-        const text = await res.text();
-        data = { message: text };
-      } catch {}
     }
 
     if (!res.ok) {
-      const serverMessage = data?.error || data?.message;
-      let detailedError = serverMessage;
+      let detailedError = data?.error || (data?.message && typeof data.message === 'string' && !data.message.includes('<') ? data.message : '');
 
       if (!detailedError) {
         if (res.status === 401) {
           detailedError = 'اسم المستخدم أو كلمة المرور غير صحيحة (401 Unauthorized).';
         } else if (res.status === 403) {
-          detailedError = 'غير مصرح لك بالوصول أو كلمة المرور الحالية غير صحيحة (403 Forbidden).';
+          detailedError = 'غير مصرح لك بالوصول (403 Forbidden).';
         } else if (res.status === 404) {
           detailedError = `المسار المطلوب غير موجود في الخادم (404 Not Found: ${endpoint}).`;
         } else if (res.status >= 500) {
-          detailedError = `خطأ داخلي في الخادم (${res.status} Server Error). يرجى مراجعة سجلات الخادم.`;
+          detailedError = `خطأ داخلي في الخادم (${res.status} Server Error).`;
         } else {
           detailedError = `فشل الطلب مع رمز الحالة ${res.status}.`;
         }
@@ -101,6 +99,16 @@ export async function apiFetch<T = any>(
 
       console.warn(`[apiFetch Error] ${options.method || 'GET'} ${url} returned ${res.status}:`, detailedError);
       return { ok: false, status: res.status, data, error: detailedError };
+    }
+
+    if (!isJson) {
+      console.warn(`[apiFetch Warning] ${url} returned non-JSON content:`, rawText.substring(0, 100));
+      return {
+        ok: false,
+        status: res.status,
+        data: null,
+        error: 'استجاب الخادم بصفحة ويب HTML بدلاً من استجابة JSON برمجية.',
+      };
     }
 
     return { ok: true, status: res.status, data };
