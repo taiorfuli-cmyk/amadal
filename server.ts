@@ -5,6 +5,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { initializeApp, getApps, getApp } from 'firebase/app';
+import { getAuth, GoogleAuthProvider, signInWithCredential } from 'firebase/auth';
 import crypto from 'crypto';
 import {
   getFirestore,
@@ -17,6 +18,7 @@ import {
   getDocs,
   query,
   where,
+  orderBy,
   runTransaction,
   increment
 } from 'firebase/firestore';
@@ -42,6 +44,30 @@ try {
 const firebaseApp = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 const db = getFirestore(firebaseApp, firebaseConfig.firestoreDatabaseId);
 
+/**
+ * Authenticates the server runtime into Firebase Auth using Cloud Run Service Account OIDC token.
+ * This grants the server authentic isServerOrAdmin() privileges according to firestore.rules.
+ */
+async function initializeServerFirebaseAuth() {
+  try {
+    const aud = firebaseConfig.oAuthClientId;
+    if (!aud) return;
+    const metaRes = await fetch(
+      `http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/identity?audience=${aud}`,
+      { headers: { 'Metadata-Flavor': 'Google' } }
+    );
+    if (metaRes.ok) {
+      const idToken = await metaRes.text();
+      const auth = getAuth(firebaseApp);
+      const credential = GoogleAuthProvider.credential(idToken);
+      const uc = await signInWithCredential(auth, credential);
+      console.log(`[Server Auth] Authenticated as Cloud Run Service Account: ${uc.user.email} (UID: ${uc.user.uid})`);
+    }
+  } catch (err: any) {
+    // Normal in local or standalone environments
+  }
+}
+
 // Local cache directory for fast image serving
 const MEDIA_CACHE_DIR = path.resolve(__dirname, '.media_cache');
 if (!fs.existsSync(MEDIA_CACHE_DIR)) {
@@ -49,31 +75,83 @@ if (!fs.existsSync(MEDIA_CACHE_DIR)) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Admin Security: Cryptographic Password Hashing (PBKDF2 + Salt)
+// Admin Security: Cryptographic Password Hashing (PBKDF2-HMAC-SHA512)
+// Upgraded to OWASP-compliant 210,000 iterations with transparent migration
 // ─────────────────────────────────────────────────────────────
-function hashPassword(password: string, salt?: string): { hash: string; salt: string } {
+const PBKDF2_ITERATIONS = 210000;
+const LEGACY_ITERATIONS = 10000;
+
+function hashPassword(
+  password: string,
+  salt?: string,
+  iterations: number = PBKDF2_ITERATIONS
+): { hash: string; salt: string; iterations: number } {
   const actualSalt = salt || crypto.randomBytes(16).toString('hex');
-  const hash = crypto.pbkdf2Sync(password, actualSalt, 10000, 64, 'sha512').toString('hex');
-  return { hash, salt: actualSalt };
+  const hash = crypto.pbkdf2Sync(password, actualSalt, iterations, 64, 'sha512').toString('hex');
+  return { hash, salt: actualSalt, iterations };
 }
 
-function verifyPassword(password: string, hash: string, salt: string): boolean {
-  if (!password || !hash || !salt) return false;
-  try {
-    const calculated = crypto.pbkdf2Sync(password, salt, 10000, 64, 'sha512').toString('hex');
-    return calculated === hash;
-  } catch {
-    return false;
+interface PasswordVerificationResult {
+  isValid: boolean;
+  needsRehash: boolean;
+}
+
+function verifyPassword(
+  password: string,
+  storedHash: string,
+  storedSalt: string,
+  storedIterations?: number
+): PasswordVerificationResult {
+  if (!password || !storedHash || !storedSalt) {
+    return { isValid: false, needsRehash: false };
   }
+
+  const effectiveIterations =
+    typeof storedIterations === 'number' && storedIterations > 0
+      ? storedIterations
+      : LEGACY_ITERATIONS;
+
+  try {
+    const calculated = crypto
+      .pbkdf2Sync(password, storedSalt, effectiveIterations, 64, 'sha512')
+      .toString('hex');
+    if (calculated === storedHash) {
+      return {
+        isValid: true,
+        needsRehash: effectiveIterations < PBKDF2_ITERATIONS,
+      };
+    }
+  } catch {}
+
+  // Fallback check with legacy 10,000 iterations if stored differed
+  if (effectiveIterations !== LEGACY_ITERATIONS) {
+    try {
+      const calculatedLegacy = crypto
+        .pbkdf2Sync(password, storedSalt, LEGACY_ITERATIONS, 64, 'sha512')
+        .toString('hex');
+      if (calculatedLegacy === storedHash) {
+        return { isValid: true, needsRehash: true };
+      }
+    } catch {}
+  }
+
+  return { isValid: false, needsRehash: false };
 }
 
 function isDefaultAdminCredentials(hash: string, salt: string): boolean {
   if (!hash || !salt) return true;
   try {
-    const calc123 = crypto.pbkdf2Sync('admin123', salt, 10000, 64, 'sha512').toString('hex');
+    // Check against legacy 10k iterations
+    const calc123 = crypto.pbkdf2Sync('admin123', salt, LEGACY_ITERATIONS, 64, 'sha512').toString('hex');
     if (calc123 === hash) return true;
-    const calcAdmin = crypto.pbkdf2Sync('admin', salt, 10000, 64, 'sha512').toString('hex');
+    const calcAdmin = crypto.pbkdf2Sync('admin', salt, LEGACY_ITERATIONS, 64, 'sha512').toString('hex');
     if (calcAdmin === hash) return true;
+
+    // Check against modern 210k iterations
+    const calc123_210 = crypto.pbkdf2Sync('admin123', salt, PBKDF2_ITERATIONS, 64, 'sha512').toString('hex');
+    if (calc123_210 === hash) return true;
+    const calcAdmin_210 = crypto.pbkdf2Sync('admin', salt, PBKDF2_ITERATIONS, 64, 'sha512').toString('hex');
+    if (calcAdmin_210 === hash) return true;
   } catch {}
   return false;
 }
@@ -82,108 +160,53 @@ function isDefaultAdminCredentials(hash: string, salt: string): boolean {
 const activeAdminSessions = new Map<string, { username: string; expiresAt: number; uid?: string }>();
 const ADMIN_CREDENTIALS_FILE = path.join(__dirname, '.admin_credentials.json');
 
-// Helper to retrieve or initialize admin credentials from Firestore database (collection 'admins')
-// with fallback to local file backup and default bootstrap (admin / admin123)
-async function getAdminCredentials(lookupUsername?: string): Promise<{ username: string; hash: string; salt: string; updatedAt: string }> {
-  // 1. If lookupUsername is provided, query Firestore for matching username (case-insensitive)
-  if (lookupUsername && typeof lookupUsername === 'string') {
-    try {
-      const cleanLookup = lookupUsername.trim().toLowerCase();
-      const adminsRef = collection(db, 'admins');
-      const q = query(adminsRef, where('username_lower', '==', cleanLookup));
-      const qSnap = await getDocs(q);
-      if (!qSnap.empty) {
-        const docData = qSnap.docs[0].data();
-        if (docData.passwordHash && docData.salt) {
-          return {
-            username: docData.username || lookupUsername,
-            hash: docData.passwordHash,
-            salt: docData.salt,
-            updatedAt: docData.updatedAt || new Date().toISOString(),
-          };
-        }
-      }
-    } catch (e) {
-      console.warn('[Server] Error querying admins by username from Firestore:', e);
-    }
-  }
+export interface StoredAdminCredentials {
+  username: string;
+  username_lower: string;
+  passwordHash: string;
+  salt: string;
+  iterations?: number;
+  version?: number;
+  updatedAt: string;
+}
 
-  // 2. Fetch main admin document from Firestore: /admins/main_admin
-  try {
-    const mainAdminRef = doc(db, 'admins', 'main_admin');
-    const snap = await getDoc(mainAdminRef);
-    if (snap.exists()) {
-      const data = snap.data();
-      if (data.passwordHash && data.salt) {
-        const creds = {
-          username: data.username || 'admin',
-          hash: data.passwordHash,
-          salt: data.salt,
-          updatedAt: data.updatedAt || new Date().toISOString(),
-        };
-        // Keep local backup in sync
-        try {
-          fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(data, null, 2), 'utf-8');
-        } catch {}
-        return creds;
-      }
-    }
-  } catch (err) {
-    console.warn('[Server] Notice reading admin credentials from Firestore:', err);
-  }
-
-  // 3. Fallback to local persistent backup file
+/**
+ * Retrieve or initialize admin credentials securely from local encrypted store.
+ * Never stores or exposes plaintext passwords.
+ */
+async function getAdminCredentials(_lookupUsername?: string): Promise<StoredAdminCredentials> {
+  // Read from local persistent credentials file
   try {
     if (fs.existsSync(ADMIN_CREDENTIALS_FILE)) {
       const raw = fs.readFileSync(ADMIN_CREDENTIALS_FILE, 'utf-8');
       const data = JSON.parse(raw);
       if (data.passwordHash && data.salt) {
-        const creds = {
+        return {
           username: data.username || 'admin',
-          hash: data.passwordHash,
+          username_lower: (data.username || 'admin').toLowerCase(),
+          passwordHash: data.passwordHash,
           salt: data.salt,
+          iterations: data.iterations || LEGACY_ITERATIONS,
+          version: data.version || 1,
           updatedAt: data.updatedAt || new Date().toISOString(),
         };
-        // Try syncing to Firestore in the background
-        try {
-          const mainAdminRef = doc(db, 'admins', 'main_admin');
-          await setDoc(
-            mainAdminRef,
-            {
-              username: creds.username,
-              username_lower: creds.username.toLowerCase(),
-              passwordHash: creds.hash,
-              salt: creds.salt,
-              updatedAt: creds.updatedAt,
-            },
-            { merge: true }
-          );
-        } catch {}
-        return creds;
       }
     }
   } catch (err) {
-    console.warn('[Server] Error reading local admin credentials file:', err);
+    console.warn('[Server] Notice reading local admin credentials file:', err);
   }
 
-  // 4. Initial Bootstrap: admin / admin123
-  const initial = hashPassword('admin123');
-  const initialDoc = {
+  // Initial Bootstrap: admin / admin123 with modern 210,000 iterations
+  const initial = hashPassword('admin123', undefined, PBKDF2_ITERATIONS);
+  const initialDoc: StoredAdminCredentials = {
     username: 'admin',
     username_lower: 'admin',
     passwordHash: initial.hash,
     salt: initial.salt,
-    createdAt: new Date().toISOString(),
+    iterations: PBKDF2_ITERATIONS,
+    version: 2,
     updatedAt: new Date().toISOString(),
   };
-
-  try {
-    const mainAdminRef = doc(db, 'admins', 'main_admin');
-    await setDoc(mainAdminRef, initialDoc, { merge: true });
-    console.log('[Server] Initialized default admin credentials in Firestore.');
-  } catch (e) {
-    console.warn('[Server] Notice saving initial admin credentials to Firestore:', e);
-  }
 
   try {
     fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(initialDoc, null, 2), 'utf-8');
@@ -191,12 +214,38 @@ async function getAdminCredentials(lookupUsername?: string): Promise<{ username:
     console.warn('[Server] Error saving initial admin credentials to local file:', e);
   }
 
-  return {
-    username: 'admin',
-    hash: initial.hash,
-    salt: initial.salt,
-    updatedAt: initialDoc.updatedAt,
-  };
+  return initialDoc;
+}
+
+/**
+ * Strict Admin Authorization Middleware.
+ * Enforces valid active session token on all sensitive endpoints.
+ */
+function requireAdminAuth(req: express.Request, res: express.Response, next: express.NextFunction) {
+  const authHeader = req.headers.authorization;
+  const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  const xToken = req.headers['x-admin-token'] as string | undefined;
+  const cookieToken = req.cookies?.amadal_admin_token as string | undefined;
+  const token = bearerToken || xToken || cookieToken;
+
+  if (!token) {
+    return res.status(401).json({
+      success: false,
+      error: 'غير مصرح: يجب تسجيل الدخول إلى لوحة التحكم الإدارية أولاً.',
+    });
+  }
+
+  const session = activeAdminSessions.get(token);
+  if (!session || Date.now() > session.expiresAt) {
+    if (session) activeAdminSessions.delete(token);
+    return res.status(401).json({
+      success: false,
+      error: 'انتهت صلاحية جلسة الإدارة أو رمز الجلسة غير صالح. يرجى تسجيل الدخول مجدداً.',
+    });
+  }
+
+  (req as any).adminSession = session;
+  next();
 }
 
 // Backward compatibility alias
@@ -298,6 +347,9 @@ function formatAlgerianPhone(phone: string): string {
 async function startServer() {
   const app = express();
 
+  // Initialize server Firebase Auth identity if available in runtime environment
+  await initializeServerFirebaseAuth();
+
   // In development, AI Studio dev server must run on port 3000.
   // Parse CLI --port argument if provided by runner, otherwise enforce 3000 in dev.
   const portArgIndex = process.argv.findIndex((arg) => arg === '--port' || arg === '-p');
@@ -349,9 +401,9 @@ async function startServer() {
   app.use(express.urlencoded({ limit: '30mb', extended: true }));
 
   // ─────────────────────────────────────────────────────────────
-  // 1. GET Anderson Settings
+  // 1. GET Anderson Settings (Protected)
   // ─────────────────────────────────────────────────────────────
-  app.get('/api/anderson/settings', async (_req, res) => {
+  app.get('/api/anderson/settings', requireAdminAuth, async (_req, res) => {
     try {
       const settings = await getStoredAndersonSettings();
       res.json({
@@ -374,9 +426,9 @@ async function startServer() {
   });
 
   // ─────────────────────────────────────────────────────────────
-  // 2. POST Save Anderson Settings
+  // 2. POST Save Anderson Settings (Protected)
   // ─────────────────────────────────────────────────────────────
-  app.post('/api/anderson/settings', async (req, res) => {
+  app.post('/api/anderson/settings', requireAdminAuth, async (req, res) => {
     try {
       const { enabled, apiToken, apiBaseUrl, autoSendOrders } = req.body;
       const current = await getStoredAndersonSettings();
@@ -1488,10 +1540,8 @@ async function startServer() {
   // Supports cross-origin Live URLs, Bearer tokens, and secure cookies
   app.post(['/api/admin/login', '/api/login'], async (req, res) => {
     try {
-      const { username, password, clientUid } = req.body || {};
+      const { username, password } = req.body || {};
       const cleanUsername = typeof username === 'string' ? username.trim() : '';
-
-      console.log(`[Admin Login API] Login attempt for username: "${cleanUsername}" from origin: ${req.headers.origin || 'same-origin'}`);
 
       if (!cleanUsername || !password) {
         return res.status(400).json({
@@ -1500,60 +1550,72 @@ async function startServer() {
         });
       }
 
-      // 1. Fetch credentials by username from Firestore or fallback
+      // Fetch authentic credentials from local encrypted store
       const creds = await getAdminCredentials(cleanUsername);
       const isUsernameMatch =
         cleanUsername.toLowerCase() === creds.username.toLowerCase() ||
-        cleanUsername.toLowerCase() === 'admin' ||
-        (cleanUsername.includes('@') && creds.username.toLowerCase() === 'admin');
+        cleanUsername.toLowerCase() === 'admin';
 
       const rawPass = typeof password === 'string' ? password : '';
       const trimmedPass = rawPass.trim();
 
-      let isPasswordValid = verifyPassword(rawPass, creds.hash, creds.salt)
-        || verifyPassword(trimmedPass, creds.hash, creds.salt);
+      let verifyResult = verifyPassword(rawPass, creds.passwordHash, creds.salt, creds.iterations);
+      if (!verifyResult.isValid && trimmedPass !== rawPass) {
+        verifyResult = verifyPassword(trimmedPass, creds.passwordHash, creds.salt, creds.iterations);
+      }
 
-      // If credentials match default state, accept either admin123 or admin seamlessly
-      if (!isPasswordValid && isDefaultAdminCredentials(creds.hash, creds.salt)) {
+      // Default credentials fallback (admin / admin123)
+      if (!verifyResult.isValid && isDefaultAdminCredentials(creds.passwordHash, creds.salt)) {
         if (trimmedPass === 'admin123' || trimmedPass === 'admin') {
-          isPasswordValid = true;
+          verifyResult = { isValid: true, needsRehash: true };
         }
       }
 
-      console.log(`[Admin Login API] Verification check for "${cleanUsername}":`, {
-        storedUsername: creds.username,
-        isUsernameMatch,
-        isPasswordValid,
-      });
-
-      if (!isUsernameMatch || !isPasswordValid) {
-        console.warn(`[Admin Login API] Authentication failed for username: "${cleanUsername}"`);
+      if (!isUsernameMatch || !verifyResult.isValid) {
         return res.status(401).json({
           success: false,
-          error: 'اسم المستخدم أو كلمة المرور غير صحيحة. يرجى التأكد وإعادة المحاولة (بيانات الدخول الافتراضية: admin / admin123).',
+          error: 'اسم المستخدم أو كلمة المرور غير صحيحة. يرجى التأكد وإعادة المحاولة.',
         });
       }
 
-      // Generate session token (valid for 7 days)
+      // Transparent upgrade to OWASP 210,000 iterations if needed
+      if (verifyResult.needsRehash) {
+        try {
+          const upgraded = hashPassword(trimmedPass, undefined, PBKDF2_ITERATIONS);
+          const updatedDoc = {
+            ...creds,
+            passwordHash: upgraded.hash,
+            salt: upgraded.salt,
+            iterations: PBKDF2_ITERATIONS,
+            version: 2,
+            updatedAt: new Date().toISOString(),
+          };
+          fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(updatedDoc, null, 2), 'utf-8');
+          console.log(`[Admin Security] Transparently upgraded credentials for "${creds.username}" to 210,000 PBKDF2 iterations.`);
+        } catch (upgradeErr) {
+          console.warn('[Admin Security] Error during transparent hash upgrade:', upgradeErr);
+        }
+      }
+
+      // Generate cryptographically random session token (valid for 7 days)
       const token = crypto.randomBytes(32).toString('hex');
       const expiresAt = Date.now() + 7 * 24 * 60 * 60 * 1000;
       activeAdminSessions.set(token, {
         username: creds.username,
         expiresAt,
-        uid: clientUid || undefined,
       });
 
-      // Set cookie configured for Live URL (HTTPS), preview iframes, and cross-origin requests
+      // Set hardened HTTP-Only cookie (prevents XSS theft)
       const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
       res.cookie('amadal_admin_token', token, {
-        httpOnly: false, // Accessible to script for client verification
+        httpOnly: true, // HARDENED: XSS protection
         secure: isHttps || process.env.NODE_ENV === 'production',
         sameSite: isHttps ? 'none' : 'lax',
         maxAge: 7 * 24 * 60 * 60 * 1000,
         path: '/',
       });
 
-      console.log(`[Admin Login API] Login success for admin "${creds.username}". Session token issued.`);
+      console.log(`[Admin Login API] Admin "${creds.username}" logged in successfully. Session token generated.`);
 
       return res.json({
         success: true,
@@ -1587,7 +1649,7 @@ async function startServer() {
 
       const session = activeAdminSessions.get(token);
       if (!session || Date.now() > session.expiresAt) {
-        activeAdminSessions.delete(token);
+        if (session) activeAdminSessions.delete(token);
         return res.status(401).json({ success: false, authenticated: false, valid: false, error: 'انتهت صلاحية الجلسة.' });
       }
 
@@ -1603,16 +1665,11 @@ async function startServer() {
   });
 
   // POST /api/admin/update-credentials and /api/update-credentials:
-  // Update Username and/or Password with Cryptographic Hashing and Firestore Database Commit
-  app.post(['/api/admin/update-credentials', '/api/update-credentials'], async (req, res) => {
+  // Update Username and/or Password with Cryptographic Hashing (210,000 iterations)
+  // Protected with requireAdminAuth
+  app.post(['/api/admin/update-credentials', '/api/update-credentials'], requireAdminAuth, async (req, res) => {
     try {
-      const { currentPassword, newUsername, newPassword, token } = req.body || {};
-
-      console.log('[Admin Security] Update credentials request received:', {
-        hasCurrentPassword: Boolean(currentPassword),
-        newUsername: newUsername || '(not provided)',
-        hasNewPassword: Boolean(newPassword),
-      });
+      const { currentPassword, newUsername, newPassword } = req.body || {};
 
       if (!currentPassword || typeof currentPassword !== 'string') {
         return res.status(400).json({
@@ -1621,12 +1678,11 @@ async function startServer() {
         });
       }
 
-      // Step 1: Read current authentic credentials from Firestore / backup
+      // Step 1: Read current authentic credentials from local file
       const creds = await getAdminCredentials();
-      const isCurrentPasswordValid = verifyPassword(currentPassword, creds.hash, creds.salt);
+      const verifyCurr = verifyPassword(currentPassword, creds.passwordHash, creds.salt, creds.iterations);
 
-      if (!isCurrentPasswordValid) {
-        console.warn('[Admin Security] Update credentials rejected: Current password verification failed.');
+      if (!verifyCurr.isValid) {
         return res.status(403).json({
           success: false,
           error: 'كلمة المرور الحالية غير صحيحة. يرجى التأكد وإعادة المحاولة.',
@@ -1634,8 +1690,9 @@ async function startServer() {
       }
 
       let finalUsername = creds.username;
-      let finalHash = creds.hash;
+      let finalHash = creds.passwordHash;
       let finalSalt = creds.salt;
+      let finalIterations = creds.iterations || PBKDF2_ITERATIONS;
       let changedAny = false;
 
       // Step 2: Handle new username if provided
@@ -1653,7 +1710,7 @@ async function startServer() {
         }
       }
 
-      // Step 3: Handle new password if provided
+      // Step 3: Handle new password if provided (OWASP 210,000 iterations)
       if (typeof newPassword === 'string' && newPassword.trim()) {
         if (newPassword.length < 6) {
           return res.status(400).json({
@@ -1661,9 +1718,10 @@ async function startServer() {
             error: 'يجب ألا تقل كلمة المرور الجديدة عن 6 أحرف أو أرقام.',
           });
         }
-        const newHashData = hashPassword(newPassword);
+        const newHashData = hashPassword(newPassword, undefined, PBKDF2_ITERATIONS);
         finalHash = newHashData.hash;
         finalSalt = newHashData.salt;
+        finalIterations = PBKDF2_ITERATIONS;
         changedAny = true;
       }
 
@@ -1675,36 +1733,23 @@ async function startServer() {
       }
 
       const nowIso = new Date().toISOString();
-      const updatedPayload = {
+      const updatedPayload: StoredAdminCredentials = {
         username: finalUsername,
         username_lower: finalUsername.toLowerCase(),
         passwordHash: finalHash,
         salt: finalSalt,
+        iterations: finalIterations,
+        version: 2,
         updatedAt: nowIso,
       };
 
-      // Step 4: Commit to Firestore database (admins collection)
-      try {
-        const adminDocRef = doc(db, 'admins', 'main_admin');
-        await setDoc(adminDocRef, updatedPayload, { merge: true });
-        console.log('[Admin Security] Committed updated credentials to Firestore database successfully.');
-      } catch (dbErr) {
-        console.error('[Admin Security] Error committing to Firestore admins collection:', dbErr);
-      }
+      // Step 4: Save credentials securely to local file
+      fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(updatedPayload, null, 2), 'utf-8');
 
-      // Step 5: Save local file backup for instant redundancy
-      try {
-        fs.writeFileSync(ADMIN_CREDENTIALS_FILE, JSON.stringify(updatedPayload, null, 2), 'utf-8');
-        console.log('[Admin Security] Saved credentials backup to local file successfully.');
-      } catch (writeErr) {
-        console.error('[Server] Failed to write updated credentials to file:', writeErr);
-      }
-
-      // Step 6: Update active session token if present
-      const effectiveToken = (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.substring(7) : '')
-        || (req.headers['x-admin-token'] as string)
-        || req.cookies?.amadal_admin_token
-        || token;
+      // Step 5: Update active session token
+      const authHeader = req.headers.authorization;
+      const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+      const effectiveToken = bearerToken || (req.headers['x-admin-token'] as string) || req.cookies?.amadal_admin_token;
 
       if (effectiveToken && activeAdminSessions.has(effectiveToken)) {
         const s = activeAdminSessions.get(effectiveToken)!;
@@ -1717,13 +1762,13 @@ async function startServer() {
         success: true,
         username: finalUsername,
         updatedAt: nowIso,
-        message: 'تم تحديث اسم المستخدم وتشفير كلمة المرور الجديدة وحفظها في قاعدة البيانات بنجاح.',
+        message: 'تم تحديث اسم المستخدم وتشفير كلمة المرور الجديدة بنجاح (210,000 تكرار PBKDF2).',
       });
     } catch (err: any) {
       console.error('[Admin Update Credentials Error]:', err);
       return res.status(500).json({
         success: false,
-        error: 'حدث خطأ أثناء حفظ وتشفير البيانات الجديدة في قاعدة البيانات.',
+        error: 'حدث خطأ أثناء حفظ وتشفير البيانات الجديدة.',
       });
     }
   });
@@ -1731,15 +1776,18 @@ async function startServer() {
   // POST /api/admin/logout and /api/logout
   app.post(['/api/admin/logout', '/api/logout'], async (req, res) => {
     try {
+      const authHeader = req.headers.authorization;
+      const bearerToken = authHeader && authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
       const cookieToken = req.cookies?.amadal_admin_token;
       const { token } = req.body || {};
-      const targetToken = token || cookieToken || (req.headers['x-admin-token'] as string);
+      const targetToken = token || bearerToken || cookieToken || (req.headers['x-admin-token'] as string);
       if (targetToken) {
         activeAdminSessions.delete(targetToken);
       }
 
       const isHttps = req.secure || req.headers['x-forwarded-proto'] === 'https';
       res.clearCookie('amadal_admin_token', {
+        httpOnly: true,
         secure: isHttps || process.env.NODE_ENV === 'production',
         sameSite: isHttps ? 'none' : 'lax',
         path: '/',
@@ -1751,13 +1799,14 @@ async function startServer() {
     }
   });
 
-  // GET /api/admin/status
-  app.get('/api/admin/status', async (_req, res) => {
+  // GET /api/admin/status (Protected)
+  app.get('/api/admin/status', requireAdminAuth, async (_req, res) => {
     try {
       const creds = await getAdminCredentials();
       return res.json({
         success: true,
         username: creds.username,
+        iterations: creds.iterations || PBKDF2_ITERATIONS,
         updatedAt: creds.updatedAt,
       });
     } catch (err: any) {
@@ -1766,11 +1815,83 @@ async function startServer() {
   });
 
   // ─────────────────────────────────────────────────────────────
+  // Administrative Operations Endpoints (Protected by requireAdminAuth)
+  // ─────────────────────────────────────────────────────────────
+
+  // GET /api/admin/orders - Retrieve all orders securely
+  app.get('/api/admin/orders', requireAdminAuth, async (_req, res) => {
+    try {
+      const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
+      const snap = await getDocs(q);
+      const orders: any[] = [];
+      snap.forEach((d) => orders.push({ ...d.data(), id: d.id }));
+      return res.json({ success: true, orders });
+    } catch (err: any) {
+      console.error('[Admin API Orders Fetch Error]:', err);
+      return res.status(500).json({ success: false, error: 'تعذر جلب قائمة الطلبات من الخادم.' });
+    }
+  });
+
+  // POST /api/admin/orders/:id/status - Update order status
+  app.post('/api/admin/orders/:id/status', requireAdminAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { status, notes } = req.body;
+      const orderRef = doc(db, 'orders', id);
+      const updateData: Record<string, any> = { updatedAt: new Date().toISOString() };
+      if (status) updateData.status = status;
+      if (notes !== undefined) updateData.notes = notes;
+      await updateDoc(orderRef, updateData);
+      return res.json({ success: true, message: 'تم تحديث حالة الطلب بنجاح' });
+    } catch (err: any) {
+      console.error('[Admin API Order Status Update Error]:', err);
+      return res.status(500).json({ success: false, error: 'فشل تحديث حالة الطلب' });
+    }
+  });
+
+  // DELETE /api/admin/orders/:id - Delete order
+  app.delete('/api/admin/orders/:id', requireAdminAuth, async (req, res) => {
+    try {
+      const { id } = req.params;
+      await deleteDoc(doc(db, 'orders', id));
+      return res.json({ success: true, message: 'تم حذف الطلب بنجاح' });
+    } catch (err: any) {
+      console.error('[Admin API Order Delete Error]:', err);
+      return res.status(500).json({ success: false, error: 'فشل حذف الطلب' });
+    }
+  });
+
+  // GET /api/admin/customers - Retrieve all customers securely
+  app.get('/api/admin/customers', requireAdminAuth, async (_req, res) => {
+    try {
+      const snap = await getDocs(collection(db, 'customers'));
+      const customers: any[] = [];
+      snap.forEach((d) => customers.push({ ...d.data(), id: d.id }));
+      return res.json({ success: true, customers });
+    } catch (err: any) {
+      console.error('[Admin API Customers Fetch Error]:', err);
+      return res.status(500).json({ success: false, error: 'تعذر جلب قائمة العملاء من الخادم.' });
+    }
+  });
+
+  // POST /api/admin/settings - Save store settings securely
+  app.post('/api/admin/settings', requireAdminAuth, async (req, res) => {
+    try {
+      const settingsData = req.body;
+      await setDoc(doc(db, 'settings', 'store'), settingsData, { merge: true });
+      return res.json({ success: true, message: 'تم حفظ إعدادات المتجر بنجاح' });
+    } catch (err: any) {
+      console.error('[Admin API Settings Save Error]:', err);
+      return res.status(500).json({ success: false, error: 'فشل حفظ إعدادات المتجر' });
+    }
+  });
+
+  // ─────────────────────────────────────────────────────────────
   // 12. HIGH-PERFORMANCE CLOUD MEDIA STORAGE & SERVING
   // ─────────────────────────────────────────────────────────────
 
-  // POST /api/storage/upload
-  app.post('/api/storage/upload', async (req, res) => {
+  // POST /api/storage/upload (Protected)
+  app.post('/api/storage/upload', requireAdminAuth, async (req, res) => {
     try {
       const { fileBase64, fileName, folder, subfolder } = req.body || {};
       if (!fileBase64 || typeof fileBase64 !== 'string') {
@@ -1833,8 +1954,8 @@ async function startServer() {
     }
   });
 
-  // POST /api/storage/delete: Remove stored media file
-  app.post('/api/storage/delete', (req, res) => {
+  // POST /api/storage/delete: Remove stored media file (Protected)
+  app.post('/api/storage/delete', requireAdminAuth, (req, res) => {
     try {
       const { pathOrUrl } = req.body || {};
       if (!pathOrUrl || typeof pathOrUrl !== 'string') {

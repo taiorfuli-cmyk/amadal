@@ -13,7 +13,6 @@ import {
   ArrowRight,
   LogOut,
   ShieldCheck,
-  ShieldAlert,
   ExternalLink,
   Lock,
   UserCheck,
@@ -25,12 +24,13 @@ import {
   RefreshCw,
   AlertCircle
 } from 'lucide-react';
-import { Product, Order, Customer, Category } from '../../types';
+import { Product, Order, Customer, Category, Coupon } from '../../types';
 import { collection, onSnapshot, query, orderBy, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
 import { useAuth } from '../../context/AuthContext';
 import { useStore } from '../../context/StoreContext';
 import { AmadalLogo } from '../../components/AmadalLogo';
+import { apiFetch } from '../../utils/apiConfig';
 
 // Tabs
 import { AdminOverviewTab } from './tabs/AdminOverviewTab';
@@ -45,7 +45,6 @@ import { AdminHomepageTab } from './tabs/AdminHomepageTab';
 import { AdminSettingsTab } from './tabs/AdminSettingsTab';
 import { AdminAndersonTab } from './tabs/AdminAndersonTab';
 import { AdminAccountTab } from './tabs/AdminAccountTab';
-import { Coupon } from '../../types';
 
 interface AdminDashboardProps {
   onBackToStore: () => void;
@@ -94,36 +93,80 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
     return () => unsub();
   }, []);
 
-  // Subscribe to Orders
-  useEffect(() => {
-    const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
-    const unsub = onSnapshot(
-      q,
-      (snapshot) => {
-        const list: Order[] = [];
-        snapshot.forEach((d) => {
-          list.push({ ...(d.data() as Order), id: d.id });
-        });
-        setOrders(list);
-      },
-      (err) => console.warn('Orders listener error:', err)
-    );
-    return () => unsub();
-  }, []);
+  // Secure Backend Polling & Fetching for Orders and Customers
+  const fetchOrdersAndCustomers = useCallback(async () => {
+    if (!isAdmin) return;
+    try {
+      const [ordersRes, custRes] = await Promise.allSettled([
+        apiFetch('/api/admin/orders'),
+        apiFetch('/api/admin/customers')
+      ]);
 
-  // Subscribe to Customers
+      if (ordersRes.status === 'fulfilled' && ordersRes.value.ok) {
+        const data = ordersRes.value.data;
+        if (data && Array.isArray(data.orders)) setOrders(data.orders);
+      }
+      if (custRes.status === 'fulfilled' && custRes.value.ok) {
+        const data = custRes.value.data;
+        if (data && Array.isArray(data.customers)) setCustomers(data.customers);
+      }
+    } catch (e) {
+      console.warn('[AdminDashboard] Secure fetch error:', e);
+    }
+  }, [isAdmin]);
+
   useEffect(() => {
-    const unsub = onSnapshot(
-      collection(db, 'customers'),
-      (snapshot) => {
-        const list: Customer[] = [];
-        snapshot.forEach((d) => list.push(d.data() as Customer));
-        setCustomers(list);
-      },
-      (err) => console.warn('Customers listener error:', err)
-    );
-    return () => unsub();
-  }, []);
+    if (isAdmin) {
+      fetchOrdersAndCustomers();
+      const interval = setInterval(fetchOrdersAndCustomers, 10000);
+      return () => clearInterval(interval);
+    }
+  }, [isAdmin, fetchOrdersAndCustomers]);
+
+  // Subscribe to Orders (fallback for Firestore real-time when authenticated)
+  useEffect(() => {
+    if (!isAdmin) return;
+    try {
+      const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
+      const unsub = onSnapshot(
+        q,
+        (snapshot) => {
+          const list: Order[] = [];
+          snapshot.forEach((d) => {
+            list.push({ ...(d.data() as Order), id: d.id });
+          });
+          setOrders(list);
+        },
+        () => {
+          // Fallback silently to server-side fetching if Firestore direct listener is restricted
+        }
+      );
+      return () => unsub();
+    } catch {
+      // ignore
+    }
+  }, [isAdmin]);
+
+  // Subscribe to Customers (fallback for Firestore real-time when authenticated)
+  useEffect(() => {
+    if (!isAdmin) return;
+    try {
+      const unsub = onSnapshot(
+        collection(db, 'customers'),
+        (snapshot) => {
+          const list: Customer[] = [];
+          snapshot.forEach((d) => list.push(d.data() as Customer));
+          setCustomers(list);
+        },
+        () => {
+          // Fallback silently to server-side fetching if Firestore direct listener is restricted
+        }
+      );
+      return () => unsub();
+    } catch {
+      // ignore
+    }
+  }, [isAdmin]);
 
   // Subscribe to Coupons
   useEffect(() => {
@@ -238,25 +281,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
                   {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                 </button>
               </div>
-            </div>
-
-            {/* Quick Fill / Hint for Default Admin Credentials */}
-            <div className="p-3 rounded-xl bg-neutral-800/60 border border-neutral-700/60 text-neutral-300 text-[11px] flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-right">
-                <ShieldAlert className="w-3.5 h-3.5 text-amber-400 shrink-0" />
-                <span>البيانات الافتراضية: <strong className="font-mono text-white">admin</strong> / <strong className="font-mono text-white">admin123</strong></span>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setLoginUsername('admin');
-                  setLoginPassword('admin123');
-                  setLoginError(null);
-                }}
-                className="text-[10px] font-bold text-amber-400 hover:text-amber-300 bg-amber-400/10 hover:bg-amber-400/20 px-2 py-1 rounded-md transition-all cursor-pointer shrink-0"
-              >
-                تعبئة تلقائية
-              </button>
             </div>
 
             <button
@@ -431,7 +455,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
           {activeTab === 'orders' && (
             <AdminOrdersTab
               orders={orders}
-              onRefresh={refreshData}
+              onRefresh={() => {
+                refreshData();
+                fetchOrdersAndCustomers();
+              }}
               selectedOrder={selectedOrder}
               onSelectOrder={setSelectedOrder}
             />

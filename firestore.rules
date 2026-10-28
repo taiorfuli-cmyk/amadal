@@ -14,8 +14,15 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Strict Admin Verification:
+    // Only verified administrators or the application's authenticated server service account
     function isAdmin() {
-      return true;
+      return isSignedIn() && (
+        request.auth.token.email == "taior.fuli@gmail.com" ||
+        request.auth.token.email == "ais-sandbox@ais-europe-west1-fe4503da8f024.iam.gserviceaccount.com" ||
+        request.auth.uid == "L7Gzd4KRywahY2xhtqCh7L1eWUH2" ||
+        exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+      );
     }
 
     function isValidId(id) {
@@ -36,15 +43,15 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 1. Admins Collection
+    // 1. Admins Collection (Strictly Locked - Never accessible from client)
     // ─────────────────────────────────────────────────────────────
     match /admins/{adminId} {
-      allow read, write: if true;
+      allow read, write: if false;
     }
 
     // ─────────────────────────────────────────────────────────────
     // 2. Products Collection
-    // Public read only. Create, delete strictly admin.
+    // Public read. Create, delete strictly admin.
     // Update allows admin, or safe inventory stock decrement on checkout.
     // ─────────────────────────────────────────────────────────────
     match /products/{productId} {
@@ -82,7 +89,7 @@ service cloud.firestore {
     // ─────────────────────────────────────────────────────────────
     // 5. Orders Collection
     // Customers can ONLY create with valid schema.
-    // Modification and deletion are strictly forbidden for customers.
+    // Modification, deletion, and bulk listing are strictly forbidden for public.
     // Only Admin can list all orders or update/delete orders.
     // ─────────────────────────────────────────────────────────────
     match /orders/{orderId} {
@@ -94,20 +101,21 @@ service cloud.firestore {
 
     // ─────────────────────────────────────────────────────────────
     // 6. Customers Collection
-    // Admin full access. Creation/update allowed for checkout profile sync.
+    // Public can ONLY create on checkout.
+    // Listing, reading, updating, and deleting customer profiles strictly admin.
     // ─────────────────────────────────────────────────────────────
     match /customers/{customerId} {
-      allow get, list: if isAdmin();
-      allow create, update: if true;
-      allow delete: if isAdmin();
+      allow create: if true;
+      allow get, list, update, delete: if isAdmin();
     }
 
     // ─────────────────────────────────────────────────────────────
     // 7. Store Settings
-    // Public read. Write strictly admin.
+    // Public read for store settings. Sensitive settings strictly forbidden.
+    // Write strictly admin.
     // ─────────────────────────────────────────────────────────────
     match /settings/{settingId} {
-      allow read: if true;
+      allow read: if settingId == 'store';
       allow write: if isAdmin();
     }
 
@@ -140,7 +148,7 @@ service cloud.firestore {
 
     // ─────────────────────────────────────────────────────────────
     // 11. Customer Reviews
-    // Public read. Authenticated create. Admin update/delete.
+    // Public read. Validated create. Admin update/delete.
     // ─────────────────────────────────────────────────────────────
     match /reviews/{reviewId} {
       allow read: if true;
