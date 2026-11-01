@@ -16,6 +16,7 @@ import {
 import { Category } from '../../../types';
 import { doc, setDoc, deleteDoc } from 'firebase/firestore';
 import { db } from '../../../firebase';
+import { apiFetch } from '../../../utils/apiConfig';
 import {
   uploadCategoryImage,
   deleteStorageFile,
@@ -249,24 +250,23 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
         throw new Error('معرف الصنف غير صالح.');
       }
 
-      // 1. Delete document from Firestore
-      await deleteDoc(doc(db, 'categories', docId));
-
-      // 2. If slug is different from id, also cleanup slug document if it exists
-      if (categoryToDelete.slug && categoryToDelete.slug !== docId) {
-        try {
-          await deleteDoc(doc(db, 'categories', categoryToDelete.slug));
-        } catch {}
+      // 1. Delete document via Server API
+      const res = await apiFetch(`/api/admin/categories/${encodeURIComponent(docId)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'فشل حذف الصنف.');
       }
 
-      // 3. Clean up associated image in Firebase Storage if present
+      // 2. Clean up associated image in Firebase Storage if present
       if (catImage && (isFirebaseStorageUrl(catImage) || catImage.startsWith('/uploads/'))) {
         deleteStorageFile(catImage).catch((err) => {
           console.warn('[Storage Cleanup Notice]:', err);
         });
       }
 
-      // 4. Close modal, notify user & trigger immediate refresh
+      // 3. Close modal, notify user & trigger immediate refresh
       setCategoryToDelete(null);
       setIsDeleting(false);
       showToast(`تم حذف صنف "${catName}" بنجاح`);
@@ -274,7 +274,7 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
     } catch (err: any) {
       console.error('[Category Delete Error]:', err?.code, err?.message, err);
       setIsDeleting(false);
-      const detail = err?.message || err?.code || 'فشل الاتصال بقاعدة البيانات';
+      const detail = err?.message || err?.code || 'فشل الاتصال بالخادم';
       setDeleteError(`حدث خطأ أثناء حذف الصنف: ${detail}`);
     }
   };
@@ -325,7 +325,7 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
       }
     }
 
-    // 2. Save category document with image URL in Firestore
+    // 2. Save category document with image URL via Server API
     try {
       const payload: Category = {
         id: slug,
@@ -338,7 +338,15 @@ export const AdminCategoriesTab: React.FC<AdminCategoriesTabProps> = ({
         isActive: editingCat.isActive ?? true,
       };
 
-      await setDoc(doc(db, 'categories', slug), payload);
+      const res = await apiFetch('/api/admin/categories', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'فشل حفظ الصنف.');
+      }
 
       // 3. Clean up old image if replaced and stored in system storage
       if (

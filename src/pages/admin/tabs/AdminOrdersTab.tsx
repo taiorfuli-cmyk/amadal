@@ -40,6 +40,7 @@ import {
 import { doc, updateDoc, deleteDoc, runTransaction, setDoc } from 'firebase/firestore';
 import { db } from '../../../firebase';
 import { useStore } from '../../../context/StoreContext';
+import { apiFetch } from '../../../utils/apiConfig';
 import { sendOrderToAnderson } from '../../../services/andersonService';
 import { formatAlgerianPhone, getWhatsAppNumber } from '../../../utils/phoneUtils';
 import {
@@ -108,17 +109,16 @@ export const AdminOrdersTab: React.FC<AdminOrdersTabProps> = ({
     }
   }, [settings?.orderArchiveDurationHours]);
 
-  // Handle changing archive duration and persisting to Firestore settings/store
+  // Handle changing archive duration and persisting to Firestore settings/store via Server API
   const handleUpdateArchiveDuration = async (hours: number) => {
     setArchiveDuration(hours);
     setIsSavingArchiveDuration(true);
     setArchiveDurationFeedback(null);
     try {
-      await setDoc(
-        doc(db, 'settings', 'store'),
-        { orderArchiveDurationHours: hours, updatedAt: new Date().toISOString() },
-        { merge: true }
-      );
+      await apiFetch('/api/admin/settings', {
+        method: 'POST',
+        body: JSON.stringify({ orderArchiveDurationHours: hours }),
+      });
       setArchiveDurationFeedback(`تم حفظ مدة الأرشفة: ${hours} ساعة بعد التسليم.`);
       setTimeout(() => setArchiveDurationFeedback(null), 3500);
       if (refreshData) refreshData();
@@ -143,12 +143,12 @@ export const AdminOrdersTab: React.FC<AdminOrdersTabProps> = ({
     });
 
     if (unflaggedDeliveredOrders.length > 0) {
-      // Silently update Firestore document so isArchived is explicitly saved
+      // Update via server endpoint so isArchived is explicitly saved
       unflaggedDeliveredOrders.forEach(async (orderToFlag) => {
         try {
-          await updateDoc(doc(db, 'orders', orderToFlag.id), {
-            isArchived: true,
-            archivedAt: new Date().toISOString(),
+          await apiFetch('/api/orders/toggle-archive', {
+            method: 'POST',
+            body: JSON.stringify({ orderId: orderToFlag.id, isArchived: true }),
           });
         } catch {
           // ignore silent background sync error
@@ -233,128 +233,38 @@ export const AdminOrdersTab: React.FC<AdminOrdersTabProps> = ({
     }
   };
 
-  // 1. Update AMADAL Order Status (مستقلة تماماً)
+  // 1. Update AMADAL Order Status (عبر الخادم الموثوق)
   const handleUpdateAmadalStatus = async (orderId: string, newStatus: OrderStatus) => {
     setIsUpdatingStatus(true);
     try {
-      const orderRef = doc(db, 'orders', orderId);
-      const currentOrder = orders.find((o) => o.id === orderId) || selectedOrder;
+      const res = await apiFetch(`/api/admin/orders/${orderId}/status`, {
+        method: 'POST',
+        body: JSON.stringify({ status: newStatus }),
+      });
 
-      // Check if transitioning to 'cancelled' and inventory needs to be restored
-      const shouldRestoreInventory =
-        newStatus === 'cancelled' &&
-        currentOrder &&
-        currentOrder.inventoryDeducted !== false &&
-        !currentOrder.stockRestored &&
-        Array.isArray(currentOrder.items) &&
-        currentOrder.items.length > 0;
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'حدث خطأ أثناء تحديث حالة طلب AMADAL');
+      }
 
-      if (shouldRestoreInventory) {
-        await runTransaction(db, async (transaction) => {
-          const freshOrderSnap = await transaction.get(orderRef);
-          if (!freshOrderSnap.exists()) return;
-          const freshOrderData = freshOrderSnap.data() as Order;
-
-          // Fetch products
-          const itemProductIds = Array.from(new Set(freshOrderData.items.map((i) => i.productId)));
-          const productDocsMap = new Map();
-          for (const pid of itemProductIds) {
-            const pRef = doc(db, 'products', pid);
-            const pSnap = await transaction.get(pRef);
-            if (pSnap.exists()) {
-              productDocsMap.set(pid, pSnap);
-            }
-          }
-
-          const updatedVariantsMap = new Map<string, ProductVariant[]>();
-          for (const item of freshOrderData.items) {
-            const pSnap = productDocsMap.get(item.productId);
-            if (!pSnap) continue;
-            const pData = pSnap.data() as Product;
-            let productVariants: ProductVariant[] = updatedVariantsMap.get(item.productId) || (
-              Array.isArray(pData.variants) ? JSON.parse(JSON.stringify(pData.variants)) : []
-            );
-            updatedVariantsMap.set(item.productId, productVariants);
-
-            const qty = Number(item.quantity) || 1;
-            let vIdx = productVariants.findIndex((v) => {
-              const matchSize = (v.size || '').trim().toLowerCase() === (item.size || '').trim().toLowerCase();
-              if (item.color) {
-                return matchSize && (v.color || '').trim().toLowerCase() === item.color.trim().toLowerCase();
-              }
-              return matchSize;
-            });
-
-            if (vIdx === -1 && productVariants.length > 0) {
-              vIdx = productVariants.findIndex(
-                (v) => (v.size || '').trim().toLowerCase() === (item.size || '').trim().toLowerCase()
-              );
-            }
-
-            if (vIdx !== -1) {
-              productVariants[vIdx].stock = (Number(productVariants[vIdx].stock) || 0) + qty;
-            }
-          }
-
-          for (const [pid, updatedVariants] of updatedVariantsMap.entries()) {
-            const pref = productDocsMap.get(pid)!.ref;
-            transaction.update(pref, {
-              variants: updatedVariants,
-              updatedAt: new Date().toISOString(),
-            });
-          }
-
-          const existingHistory = freshOrderData.statusHistory || [];
-          transaction.update(orderRef, {
-            status: 'cancelled',
-            stockRestored: true,
-            statusHistory: [
-              ...existingHistory,
-              {
-                status: 'cancelled',
-                timestamp: new Date().toISOString(),
-                note: 'تم إلغاء الطلب واسترجاع القطع إلى المخزون تلقائياً',
-              },
-            ],
-            updatedAt: new Date().toISOString(),
-          });
-        });
-
-        if (selectedOrder && selectedOrder.id === orderId) {
-          onSelectOrder({ ...selectedOrder, status: 'cancelled', stockRestored: true });
-        }
-      } else {
-        // Standard AMADAL status update
-        const nowIso = new Date().toISOString();
-        const existingHistory = currentOrder?.statusHistory || [];
-        await updateDoc(orderRef, {
+      if (selectedOrder && selectedOrder.id === orderId) {
+        onSelectOrder({
+          ...selectedOrder,
           status: newStatus,
-          statusHistory: [
-            ...existingHistory,
-            {
-              status: newStatus,
-              timestamp: nowIso,
-              note: `تحديث حالة طلب AMADAL إلى: ${newStatus}`,
-            },
-          ],
-          updatedAt: nowIso,
+          stockRestored: newStatus === 'cancelled' ? true : selectedOrder.stockRestored,
         });
-
-        if (selectedOrder && selectedOrder.id === orderId) {
-          onSelectOrder({ ...selectedOrder, status: newStatus });
-        }
       }
 
       onRefresh();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('حدث خطأ أثناء تحديث حالة طلب AMADAL');
+      alert(err.message || 'حدث خطأ أثناء تحديث حالة طلب AMADAL');
     } finally {
       setIsUpdatingStatus(false);
     }
   };
 
-  // 2. Update Delivery Shipping Status (مستقلة تماماً)
+  // 2. Update Delivery Shipping Status (عبر الخادم الموثوق)
   const handleUpdateShippingStatus = async (
     orderId: string,
     newShippingStatus: DeliveryShippingStatus,
@@ -362,78 +272,58 @@ export const AdminOrdersTab: React.FC<AdminOrdersTabProps> = ({
   ) => {
     setIsUpdatingShippingStatus(true);
     try {
-      const orderRef = doc(db, 'orders', orderId);
-      const currentOrder = orders.find((o) => o.id === orderId) || selectedOrder;
-      const nowIso = new Date().toISOString();
-
-      const updateData: Record<string, any> = {
-        shippingStatus: newShippingStatus,
-        shippingUpdatedAt: nowIso,
-        updatedAt: nowIso,
-      };
-
-      if (newTrackingNumber) {
-        updateData.shippingTrackingNumber = newTrackingNumber;
-        updateData.andersonTrackingNumber = newTrackingNumber;
-      }
-
-      // If becoming delivered, record deliveredAt in Firestore!
-      if (newShippingStatus === 'delivered') {
-        if (!currentOrder?.deliveredAt) {
-          updateData.deliveredAt = nowIso;
-        }
-        updateData.andersonStatus = 'sent';
-      } else if (newShippingStatus === 'failed') {
-        updateData.andersonStatus = 'failed';
-      } else if (newShippingStatus === 'sending') {
-        updateData.andersonStatus = 'sending';
-      } else if (newShippingStatus === 'created') {
-        updateData.andersonStatus = 'sent';
-      }
-
-      const existingHistory = currentOrder?.statusHistory || [];
-      updateData.statusHistory = [
-        ...existingHistory,
-        {
-          status: currentOrder?.status || 'new',
+      const res = await apiFetch('/api/orders/update-shipping-status', {
+        method: 'POST',
+        body: JSON.stringify({
+          orderId,
           shippingStatus: newShippingStatus,
-          timestamp: nowIso,
-          note: `تحديث حالة شحنة شركة التوصيل إلى: ${newShippingStatus}${
-            newShippingStatus === 'delivered' ? ' (تم تسجيل تاريخ ووقت التسليم الفعلي)' : ''
-          }`,
-        },
-      ];
+          trackingNumber: newTrackingNumber,
+        }),
+      });
 
-      await updateDoc(orderRef, updateData);
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'حدث خطأ أثناء تحديث حالة الشحنة');
+      }
 
+      const resData = await res.json().catch(() => ({}));
       if (selectedOrder && selectedOrder.id === orderId) {
         onSelectOrder({
           ...selectedOrder,
-          ...updateData,
+          ...(resData.order || {
+            shippingStatus: newShippingStatus,
+            shippingTrackingNumber: newTrackingNumber || selectedOrder.shippingTrackingNumber,
+          }),
         });
       }
 
       onRefresh();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('حدث خطأ أثناء تحديث حالة الشحنة');
+      alert(err.message || 'حدث خطأ أثناء تحديث حالة الشحنة');
     } finally {
       setIsUpdatingShippingStatus(false);
     }
   };
 
-  // 3. Manual Archive / Unarchive Toggle
+  // 3. Manual Archive / Unarchive Toggle (عبر الخادم الموثوق)
   const handleToggleArchive = async (orderId: string, targetArchiveState: boolean) => {
     setIsTogglingArchive(true);
     try {
-      const orderRef = doc(db, 'orders', orderId);
-      const nowIso = new Date().toISOString();
-      await updateDoc(orderRef, {
-        isArchived: targetArchiveState,
-        archivedAt: targetArchiveState ? nowIso : null,
-        updatedAt: nowIso,
+      const res = await apiFetch('/api/orders/toggle-archive', {
+        method: 'POST',
+        body: JSON.stringify({
+          orderId,
+          isArchived: targetArchiveState,
+        }),
       });
 
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'حدث خطأ أثناء تغيير حالة أرشفة الطلب');
+      }
+
+      const nowIso = new Date().toISOString();
       if (selectedOrder && selectedOrder.id === orderId) {
         onSelectOrder({
           ...selectedOrder,
@@ -443,15 +333,15 @@ export const AdminOrdersTab: React.FC<AdminOrdersTabProps> = ({
       }
 
       onRefresh();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('حدث خطأ أثناء تغيير حالة أرشفة الطلب');
+      alert(err.message || 'حدث خطأ أثناء تغيير حالة أرشفة الطلب');
     } finally {
       setIsTogglingArchive(false);
     }
   };
 
-  // Permanent Delete Handlers
+  // Permanent Delete Handlers (عبر الخادم الموثوق)
   const handleConfirmDelete = async () => {
     if (!orderToDelete) return;
     setIsDeleting(true);
@@ -461,13 +351,13 @@ export const AdminOrdersTab: React.FC<AdminOrdersTabProps> = ({
     const targetOrderNumber = orderToDelete.orderNumber;
 
     try {
-      await deleteDoc(doc(db, 'orders', targetId));
-      if (targetOrderNumber && targetOrderNumber !== targetId) {
-        try {
-          await deleteDoc(doc(db, 'orders', targetOrderNumber));
-        } catch {
-          // Ignore fallback if doc did not exist
-        }
+      const res = await apiFetch(`/api/admin/orders/${targetId}`, {
+        method: 'DELETE',
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'حدث خطأ أثناء محاولة حذف الطلب من قاعدة البيانات.');
       }
 
       if (selectedOrder && (selectedOrder.id === targetId || selectedOrder.orderNumber === targetOrderNumber)) {

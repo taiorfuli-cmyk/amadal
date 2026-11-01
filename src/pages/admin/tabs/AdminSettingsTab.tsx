@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { StoreSettings } from '../../../types';
-import { doc, setDoc } from 'firebase/firestore';
-import { db, removeUndefinedFields } from '../../../firebase';
+import { removeUndefinedFields } from '../../../firebase';
+import { apiFetch } from '../../../utils/apiConfig';
 import { useStore } from '../../../context/StoreContext';
 import { Save, Check, RefreshCw, MessageCircle } from 'lucide-react';
 import { AmadalLogo } from '../../../components/AmadalLogo';
@@ -25,12 +25,24 @@ export const AdminSettingsTab: React.FC = () => {
     setSaveSuccess(false);
 
     try {
-      await setDoc(doc(db, 'settings', 'store'), removeUndefinedFields(formData));
+      const res = await apiFetch('/api/admin/settings', {
+        method: 'POST',
+        body: JSON.stringify(removeUndefinedFields(formData)),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'حدث خطأ أثناء حفظ الإعدادات');
+      }
+
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
-    } catch (err) {
+      if (refreshData) {
+        refreshData();
+      }
+    } catch (err: any) {
       console.error(err);
-      alert('حدث خطأ أثناء حفظ الإعدادات');
+      alert(err.message || 'حدث خطأ أثناء حفظ الإعدادات');
     } finally {
       setIsSaving(false);
     }
@@ -110,7 +122,10 @@ export const AdminSettingsTab: React.FC = () => {
               onChange={(url) => setFormData((prev) => ({ ...prev, logoUrl: url }))}
               onSave={async (url) => {
                 const updated = { ...formData, logoUrl: url };
-                await setDoc(doc(db, 'settings', 'store'), removeUndefinedFields(updated), { merge: true });
+                await apiFetch('/api/admin/settings', {
+                  method: 'POST',
+                  body: JSON.stringify(removeUndefinedFields(updated)),
+                });
                 setFormData(updated);
                 await refreshData();
               }}

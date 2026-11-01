@@ -2,6 +2,7 @@ import { ref, uploadBytesResumable, getDownloadURL, deleteObject } from 'firebas
 import imageCompression from 'browser-image-compression';
 import { storage } from '../firebase';
 import { ProductImage } from '../types';
+import { apiFetch } from '../utils/apiConfig';
 
 /**
  * Strict Image Upload Validation Constants:
@@ -281,13 +282,10 @@ export async function uploadImageFile({
 
   onProgress?.(65);
 
-  // 4. Upload to high-performance server media API (/api/storage/upload)
+  // 4. Upload to high-performance server media API (/api/storage/upload) with CSRF and Auth tokens
   try {
-    const response = await fetch('/api/storage/upload', {
+    const response = await apiFetch('/api/storage/upload', {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
       body: JSON.stringify({
         fileBase64: base64Data,
         fileName: processedFile.name,
@@ -363,33 +361,47 @@ export async function uploadProductImage(
 }
 
 /**
- * Delete a file directly from Firebase Storage given its public download URL or storage path
+ * Delete a file securely via Server Media API or fallback to Firebase Storage
  */
 export async function deleteStorageFile(urlOrPath: string): Promise<boolean> {
   if (!urlOrPath) return false;
 
-  // External URLs (e.g. Unsplash, data URLs) do not exist in Firebase Storage
+  // External URLs (e.g. Unsplash, data URLs) do not exist in local/Firebase Storage
   if (urlOrPath.startsWith('http://') || urlOrPath.startsWith('https://')) {
-    if (!isFirebaseStorageUrl(urlOrPath)) {
+    if (!isFirebaseStorageUrl(urlOrPath) && !urlOrPath.includes('/api/media/')) {
       return true;
     }
   } else if (urlOrPath.startsWith('data:')) {
     return true;
   }
 
+  // 1. First attempt deletion via Server Media API (/api/storage/delete)
   try {
-    const cleanPath = extractStoragePath(urlOrPath);
-    const fileRef = ref(storage, cleanPath || urlOrPath);
-    await deleteObject(fileRef);
-    return true;
-  } catch (err: any) {
-    // If the object does not exist anymore, consider it deleted
-    if (err?.code === 'storage/object-not-found') {
-      return true;
-    }
-    console.warn('Could not delete file from Firebase Storage:', err);
-    return false;
+    await apiFetch('/api/storage/delete', {
+      method: 'POST',
+      body: JSON.stringify({ pathOrUrl: urlOrPath }),
+    });
+  } catch (srvErr) {
+    console.warn('[Server Storage Delete Notice]:', srvErr);
   }
+
+  // 2. If it's a legacy Firebase Storage reference, clean up there as well
+  if (isFirebaseStorageUrl(urlOrPath)) {
+    try {
+      const cleanPath = extractStoragePath(urlOrPath);
+      const fileRef = ref(storage, cleanPath || urlOrPath);
+      await deleteObject(fileRef);
+      return true;
+    } catch (err: any) {
+      if (err?.code === 'storage/object-not-found') {
+        return true;
+      }
+      console.warn('Could not delete file from Firebase Storage:', err);
+      return false;
+    }
+  }
+
+  return true;
 }
 
 /**

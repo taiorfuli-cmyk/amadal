@@ -8,7 +8,9 @@ interface AuthContextType {
   isAdmin: boolean;
   adminUsername: string;
   isLoading: boolean;
-  loginWithCredentials: (username: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  setupRequired: boolean;
+  setupInitialAdmin: (username: string, password: string, confirmPassword: string) => Promise<{ success: boolean; error?: string }>;
+  loginWithCredentials: (username: string, password: string) => Promise<{ success: boolean; error?: string; setupRequired?: boolean }>;
   updateCredentials: (
     currentPassword: string,
     newUsername?: string,
@@ -21,11 +23,13 @@ const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 const TOKEN_STORAGE_KEY = 'amadal_admin_token';
 const USERNAME_STORAGE_KEY = 'amadal_admin_username';
+const CSRF_STORAGE_KEY = 'amadal_csrf_token';
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [isAdmin, setIsAdmin] = useState<boolean>(false);
   const [adminUsername, setAdminUsername] = useState<string>('');
+  const [setupRequired, setSetupRequired] = useState<boolean>(false);
   const [isLoading, setIsLoading] = useState<boolean>(true);
 
   // Monitor Firebase auth state
@@ -36,9 +40,31 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     return () => unsubscribe();
   }, []);
 
-  // Verify stored session on startup
+  // Check setup status
+  const checkSetupStatus = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/admin/setup-status', { skipAuth: true });
+      if (res.ok && res.data) {
+        const needsSetup = res.data.setupRequired === true || (res.data.initialized === false && res.data.hasAdmin === false);
+        setSetupRequired(needsSetup);
+        return needsSetup;
+      }
+    } catch {}
+    return false;
+  }, []);
+
+  // Verify stored session on startup (Server is the definitive authority)
   const verifySession = useCallback(async () => {
     try {
+      // First check setup status
+      const needsSetup = await checkSetupStatus();
+      if (needsSetup) {
+        setIsAdmin(false);
+        setAdminUsername('');
+        setIsLoading(false);
+        return;
+      }
+
       const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
       const storedUser = localStorage.getItem(USERNAME_STORAGE_KEY);
 
@@ -55,48 +81,81 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         body: JSON.stringify({ token: storedToken }),
       });
 
-      if (res.ok && res.data) {
-        const data = res.data;
-        if (data.authenticated || data.valid || data.success) {
-          setIsAdmin(true);
-          setAdminUsername(data.username || storedUser || 'admin');
-          setIsLoading(false);
-          return;
-        }
+      if (res.ok && res.data && (res.data.authenticated || res.data.valid)) {
+        setIsAdmin(true);
+        setAdminUsername(res.data.username || storedUser || 'admin');
+        setIsLoading(false);
+        return;
       }
 
-      // If backend rejected token or expired
+      // If backend rejected token or token expired
       if (res.status === 401 || (res.data && res.data.valid === false)) {
         localStorage.removeItem(TOKEN_STORAGE_KEY);
         localStorage.removeItem(USERNAME_STORAGE_KEY);
+        localStorage.removeItem(CSRF_STORAGE_KEY);
         setIsAdmin(false);
         setAdminUsername('');
       } else {
-        // If temporary network interruption, keep session alive
-        setIsAdmin(true);
-        setAdminUsername(storedUser || 'admin');
+        setIsAdmin(false);
+        setAdminUsername('');
       }
     } catch (err) {
-      console.warn('[AuthContext] Session verification fallback:', err);
-      const storedToken = localStorage.getItem(TOKEN_STORAGE_KEY);
-      const storedUser = localStorage.getItem(USERNAME_STORAGE_KEY);
-      if (storedToken) {
-        setIsAdmin(true);
-        setAdminUsername(storedUser || 'admin');
-      }
+      console.warn('[AuthContext] Session verification failed to reach server:', err);
+      setIsAdmin(false);
+      setAdminUsername('');
     } finally {
       setIsLoading(false);
     }
-  }, []);
+  }, [checkSetupStatus]);
 
   useEffect(() => {
     verifySession();
   }, [verifySession]);
 
+  const setupInitialAdmin = async (
+    username: string,
+    password: string,
+    confirmPassword: string
+  ): Promise<{ success: boolean; error?: string }> => {
+    try {
+      setIsLoading(true);
+      const res = await apiFetch('/api/admin/initial-setup', {
+        method: 'POST',
+        skipAuth: true,
+        body: JSON.stringify({
+          username: username.trim(),
+          password,
+          confirmPassword,
+        }),
+      });
+
+      if (res.ok && res.data?.success && res.data.token) {
+        localStorage.setItem(TOKEN_STORAGE_KEY, res.data.token);
+        localStorage.setItem(USERNAME_STORAGE_KEY, res.data.username || username.trim());
+        if (res.data.csrfToken) {
+          localStorage.setItem(CSRF_STORAGE_KEY, res.data.csrfToken);
+        }
+        setIsAdmin(true);
+        setAdminUsername(res.data.username || username.trim());
+        setSetupRequired(false);
+        return { success: true };
+      }
+
+      return {
+        success: false,
+        error: res.error || res.data?.error || 'فشل إعداد الحساب الإداري الأولي.',
+      };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'حدث خطأ أثناء إعداد الحساب.' };
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const loginWithCredentials = async (
     username: string,
     password: string
-  ): Promise<{ success: boolean; error?: string }> => {
+  ): Promise<{ success: boolean; error?: string; setupRequired?: boolean }> => {
     try {
       setIsLoading(true);
       const cleanUsername = username.trim();
@@ -110,9 +169,21 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         }),
       });
 
+      if (res.data?.setupRequired) {
+        setSetupRequired(true);
+        return {
+          success: false,
+          setupRequired: true,
+          error: res.data.error || 'لم تتم تهيئة حساب المدير بعد. يرجى إتمام الإعداد الأولي.',
+        };
+      }
+
       if (res.ok && res.data?.success && res.data.token) {
         localStorage.setItem(TOKEN_STORAGE_KEY, res.data.token);
         localStorage.setItem(USERNAME_STORAGE_KEY, res.data.username || cleanUsername);
+        if (res.data.csrfToken) {
+          localStorage.setItem(CSRF_STORAGE_KEY, res.data.csrfToken);
+        }
         setIsAdmin(true);
         setAdminUsername(res.data.username || cleanUsername);
         return { success: true };
@@ -183,6 +254,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
     localStorage.removeItem(TOKEN_STORAGE_KEY);
     localStorage.removeItem(USERNAME_STORAGE_KEY);
+    localStorage.removeItem(CSRF_STORAGE_KEY);
     setIsAdmin(false);
     setAdminUsername('');
 
@@ -198,6 +270,8 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         isAdmin,
         adminUsername,
         isLoading,
+        setupRequired,
+        setupInitialAdmin,
         loginWithCredentials,
         updateCredentials,
         logout,

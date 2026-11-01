@@ -1,0 +1,9 @@
+{
+  "username": "amadal_admin",
+  "username_lower": "amadal_admin",
+  "passwordHash": "782f521cf67160e16655f09f639d2ed9a33b23552c197614731cabc219688e20b7989278d609f9e92c2015e094e53c35268b1467c20183c2209d73c97854ad59",
+  "salt": "3874c41ff8e1d971ee027880f924139d",
+  "iterations": 210000,
+  "version": 2,
+  "updatedAt": "2026-11-01T11:43:39.451Z"
+}

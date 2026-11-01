@@ -32,11 +32,17 @@ export const HomePage: React.FC<HomePageProps> = ({
   const [homepageConfig, setHomepageConfig] = useState<HomepageConfig>(DEFAULT_HOMEPAGE);
 
   useEffect(() => {
-    const unsub = onSnapshot(doc(db, 'homepage', 'main'), (snap) => {
-      if (snap.exists()) {
-        setHomepageConfig((prev) => ({ ...prev, ...(snap.data() as HomepageConfig) }));
+    const unsub = onSnapshot(
+      doc(db, 'homepage', 'main'),
+      (snap) => {
+        if (snap.exists()) {
+          setHomepageConfig((prev) => ({ ...prev, ...(snap.data() as HomepageConfig) }));
+        }
+      },
+      (err) => {
+        console.warn('[HomePage] Snapshot listener notice:', err);
       }
-    });
+    );
     return () => unsub();
   }, []);
 

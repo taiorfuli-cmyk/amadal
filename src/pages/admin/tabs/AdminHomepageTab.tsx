@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { HomepageConfig } from '../../../types';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { db, removeUndefinedFields } from '../../../firebase';
+import { apiFetch } from '../../../utils/apiConfig';
 import { DEFAULT_HOMEPAGE } from '../../../services/storeService';
 import { Save, Eye, EyeOff, Sparkles, Check } from 'lucide-react';
 import { ImageUploadField } from '../../../components/ImageUploadField';
@@ -31,12 +32,21 @@ export const AdminHomepageTab: React.FC = () => {
     setSaveSuccess(false);
 
     try {
-      await setDoc(doc(db, 'homepage', 'main'), removeUndefinedFields(config));
+      const res = await apiFetch('/api/admin/homepage', {
+        method: 'POST',
+        body: JSON.stringify(removeUndefinedFields(config)),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'حدث خطأ أثناء حفظ بيانات الصفحة الرئيسية');
+      }
+
       setSaveSuccess(true);
       setTimeout(() => setSaveSuccess(false), 3000);
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('حدث خطأ أثناء حفظ بيانات الصفحة الرئيسية');
+      alert(err.message || 'حدث خطأ أثناء حفظ بيانات الصفحة الرئيسية');
     } finally {
       setIsSaving(false);
     }

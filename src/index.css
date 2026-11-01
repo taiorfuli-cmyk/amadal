@@ -1,9 +1,74 @@
 @import "tailwindcss";
 
+:root {
+  /* Default AMADAL Theme CSS Variables */
+  --amadal-main-store-bg: #ffffff;
+  --amadal-main-store-text: #171717;
+  --amadal-homepage-bg: #ffffff;
+  --amadal-homepage-text: #171717;
+  --amadal-header-bg: #0a0a0a;
+  --amadal-header-text: #ffffff;
+  --amadal-footer-bg: #0a0a0a;
+  --amadal-footer-text: #e5e5e5;
+  --amadal-navbar-bg: #ffffff;
+  --amadal-navbar-text: #171717;
+
+  --amadal-prodcard-bg: #ffffff;
+  --amadal-prodcard-text: #171717;
+  --amadal-prodname-bg: #ffffff;
+  --amadal-prodname-text: #0a0a0a;
+  --amadal-prodprice-bg: #ffffff;
+  --amadal-prodprice-text: #0a0a0a;
+  --amadal-prods-section-bg: #fcfcfc;
+  --amadal-prods-section-text: #171717;
+  --amadal-prodmodal-bg: #ffffff;
+  --amadal-prodmodal-text: #171717;
+
+  --amadal-catcard-bg: #171717;
+  --amadal-catcard-text: #ffffff;
+  --amadal-catname-bg: #ffffff;
+  --amadal-catname-text: #171717;
+  --amadal-cats-section-bg: #ffffff;
+  --amadal-cats-section-text: #171717;
+
+  --amadal-btngen-bg: #0a0a0a;
+  --amadal-btngen-text: #ffffff;
+  --amadal-btnbuynow-bg: #ffffff;
+  --amadal-btnbuynow-text: #0a0a0a;
+  --amadal-btnaddcart-bg: #0a0a0a;
+  --amadal-btnaddcart-text: #ffffff;
+  --amadal-btnconfirm-bg: #0a0a0a;
+  --amadal-btnconfirm-text: #ffffff;
+  --amadal-btncont-bg: #171717;
+  --amadal-btncont-text: #ffffff;
+  --amadal-btnactions-bg: #f5f5f5;
+  --amadal-btnactions-text: #171717;
+
+  --amadal-cartdrawer-bg: #ffffff;
+  --amadal-cartdrawer-text: #171717;
+  --amadal-checkout-bg: #f9fafb;
+  --amadal-checkout-text: #171717;
+  --amadal-inputs-bg: #f9fafb;
+  --amadal-inputs-text: #0a0a0a;
+  --amadal-ordersummary-bg: #ffffff;
+  --amadal-ordersummary-text: #171717;
+
+  --amadal-modals-bg: #ffffff;
+  --amadal-modals-text: #171717;
+  --amadal-alerts-bg: #fef2f2;
+  --amadal-alerts-text: #991b1b;
+  --amadal-confirm-bg: #ffffff;
+  --amadal-confirm-text: #171717;
+  --amadal-status-bg: #ecfdf5;
+  --amadal-status-text: #065f46;
+}
+
 html,
 body {
   max-width: 100%;
   overflow-x: hidden;
+  background-color: var(--amadal-main-store-bg);
+  color: var(--amadal-main-store-text);
 }
 
 @layer utilities {
@@ -16,3 +81,138 @@ body {
   }
 }
 
+/* Theme Helper Classes for Dynamic Styling */
+.theme-main-store {
+  background-color: var(--amadal-main-store-bg) !important;
+  color: var(--amadal-main-store-text) !important;
+}
+
+.theme-homepage {
+  background-color: var(--amadal-homepage-bg) !important;
+  color: var(--amadal-homepage-text) !important;
+}
+
+.theme-header {
+  background-color: var(--amadal-header-bg) !important;
+  color: var(--amadal-header-text) !important;
+}
+
+.theme-footer {
+  background-color: var(--amadal-footer-bg) !important;
+  color: var(--amadal-footer-text) !important;
+}
+
+.theme-navbar {
+  background-color: var(--amadal-navbar-bg) !important;
+  color: var(--amadal-navbar-text) !important;
+}
+
+.theme-product-card {
+  background-color: var(--amadal-prodcard-bg) !important;
+  color: var(--amadal-prodcard-text) !important;
+}
+
+.theme-product-name {
+  background-color: var(--amadal-prodname-bg);
+  color: var(--amadal-prodname-text) !important;
+}
+
+.theme-product-price {
+  background-color: var(--amadal-prodprice-bg);
+  color: var(--amadal-prodprice-text) !important;
+}
+
+.theme-products-section {
+  background-color: var(--amadal-prods-section-bg) !important;
+  color: var(--amadal-prods-section-text) !important;
+}
+
+.theme-product-modal {
+  background-color: var(--amadal-prodmodal-bg) !important;
+  color: var(--amadal-prodmodal-text) !important;
+}
+
+.theme-category-card {
+  background-color: var(--amadal-catcard-bg) !important;
+  color: var(--amadal-catcard-text) !important;
+}
+
+.theme-category-name {
+  background-color: var(--amadal-catname-bg);
+  color: var(--amadal-catname-text) !important;
+}
+
+.theme-categories-section {
+  background-color: var(--amadal-cats-section-bg) !important;
+  color: var(--amadal-cats-section-text) !important;
+}
+
+.theme-btn-general {
+  background-color: var(--amadal-btngen-bg) !important;
+  color: var(--amadal-btngen-text) !important;
+}
+
+.theme-btn-buynow {
+  background-color: var(--amadal-btnbuynow-bg) !important;
+  color: var(--amadal-btnbuynow-text) !important;
+}
+
+.theme-btn-addtocart {
+  background-color: var(--amadal-btnaddcart-bg) !important;
+  color: var(--amadal-btnaddcart-text) !important;
+}
+
+.theme-btn-confirm {
+  background-color: var(--amadal-btnconfirm-bg) !important;
+  color: var(--amadal-btnconfirm-text) !important;
+}
+
+.theme-btn-continue {
+  background-color: var(--amadal-btncont-bg) !important;
+  color: var(--amadal-btncont-text) !important;
+}
+
+.theme-btn-actions {
+  background-color: var(--amadal-btnactions-bg) !important;
+  color: var(--amadal-btnactions-text) !important;
+}
+
+.theme-cart-drawer {
+  background-color: var(--amadal-cartdrawer-bg) !important;
+  color: var(--amadal-cartdrawer-text) !important;
+}
+
+.theme-checkout-page {
+  background-color: var(--amadal-checkout-bg) !important;
+  color: var(--amadal-checkout-text) !important;
+}
+
+.theme-customer-input {
+  background-color: var(--amadal-inputs-bg) !important;
+  color: var(--amadal-inputs-text) !important;
+}
+
+.theme-order-summary {
+  background-color: var(--amadal-ordersummary-bg) !important;
+  color: var(--amadal-ordersummary-text) !important;
+}
+
+.theme-modal {
+  background-color: var(--amadal-modals-bg) !important;
+  color: var(--amadal-modals-text) !important;
+}
+
+.theme-alert {
+  background-color: var(--amadal-alerts-bg) !important;
+  color: var(--amadal-alerts-text) !important;
+}
+
+.theme-confirm-modal {
+  background-color: var(--amadal-confirm-bg) !important;
+  color: var(--amadal-confirm-text) !important;
+}
+
+.theme-status-banner {
+  background-color: var(--amadal-status-bg) !important;
+  color: var(--amadal-status-text) !important;
+}

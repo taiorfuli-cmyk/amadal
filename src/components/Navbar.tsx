@@ -63,10 +63,10 @@ export const Navbar: React.FC<NavbarProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b border-neutral-200/80 transition-all">
+    <header className="sticky top-0 z-40 theme-navbar backdrop-blur-md border-b border-neutral-200/80 transition-all">
       {/* Announcement Bar */}
       {settings.showAnnouncement && settings.announcementText && (
-        <div className="bg-neutral-950 text-white text-xs py-2 px-4 text-center font-medium tracking-wide flex items-center justify-center gap-2">
+        <div className="theme-header text-xs py-2 px-4 text-center font-medium tracking-wide flex items-center justify-center gap-2">
           <span>{settings.announcementText}</span>
         </div>
       )}

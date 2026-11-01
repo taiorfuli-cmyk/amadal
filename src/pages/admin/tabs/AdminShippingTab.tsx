@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ALGERIA_WILAYAS, ShippingRate } from '../../../types';
 import { collection, getDocs, doc, setDoc } from 'firebase/firestore';
 import { db } from '../../../firebase';
+import { apiFetch } from '../../../utils/apiConfig';
 import { Search, Save, Truck, Check, X, ShieldCheck, Building2, CheckCircle2, RotateCcw } from 'lucide-react';
 import { useStore } from '../../../context/StoreContext';
 
@@ -89,7 +90,7 @@ export const AdminShippingTab: React.FC = () => {
     });
   };
 
-  // Toggle desk delivery availability for a wilaya with immediate persistence to Firestore
+  // Toggle desk delivery availability for a wilaya with immediate persistence to Server
   const handleToggleDeskAvailable = async (wilayaCode: string) => {
     const current = rates[wilayaCode] || {
       id: `wilaya-${wilayaCode}`,
@@ -113,21 +114,20 @@ export const AdminShippingTab: React.FC = () => {
       },
     }));
 
-    // Persist change to Firestore
+    // Persist change via Server API
     try {
-      const wilayaMeta = ALGERIA_WILAYAS.find((w) => w.code === wilayaCode);
-      await setDoc(
-        doc(db, 'shipping', `wilaya-${wilayaCode}`),
-        {
-          ...current,
-          id: `wilaya-${wilayaCode}`,
+      const res = await apiFetch('/api/admin/shipping', {
+        method: 'POST',
+        body: JSON.stringify({
           wilayaCode,
-          wilayaName: wilayaMeta?.name || current.wilayaName,
-          wilayaNameFr: wilayaMeta?.nameFr || current.wilayaNameFr,
           isDeskAvailable: newStatus,
-        },
-        { merge: true }
-      );
+        }),
+      });
+
+      if (!res.ok) {
+        throw new Error('فشل حفظ حالة توفر المكتب');
+      }
+
       setAutoSavedWilaya(wilayaCode);
       setTimeout(() => setAutoSavedWilaya((prev) => (prev === wilayaCode ? null : prev)), 2000);
     } catch (err) {
@@ -156,19 +156,17 @@ export const AdminShippingTab: React.FC = () => {
           ...current,
           isDeskAvailable: enable,
         };
-        await setDoc(
-          doc(db, 'shipping', `wilaya-${w.code}`),
-          {
-            ...current,
-            id: `wilaya-${w.code}`,
-            wilayaCode: w.code,
-            wilayaName: w.name,
-            wilayaNameFr: w.nameFr,
-            isDeskAvailable: enable,
-          },
-          { merge: true }
-        );
       }
+
+      const res = await apiFetch('/api/admin/shipping/bulk', {
+        method: 'POST',
+        body: JSON.stringify({ rates: updatedRates }),
+      });
+
+      if (!res.ok) {
+        throw new Error('فشل حفظ التعديلات الجماعية');
+      }
+
       setRates(updatedRates);
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3000);
@@ -184,22 +182,21 @@ export const AdminShippingTab: React.FC = () => {
     setIsSaving(true);
     setSavedSuccess(false);
     try {
-      for (const [code, rate] of Object.entries(rates)) {
-        const wilayaMeta = ALGERIA_WILAYAS.find((w) => w.code === code);
-        await setDoc(doc(db, 'shipping', `wilaya-${code}`), {
-          ...rate,
-          id: `wilaya-${code}`,
-          wilayaCode: code,
-          wilayaName: wilayaMeta?.name || rate.wilayaName,
-          wilayaNameFr: wilayaMeta?.nameFr || rate.wilayaNameFr,
-          isDeskAvailable: rate.isDeskAvailable !== false,
-        });
+      const res = await apiFetch('/api/admin/shipping/bulk', {
+        method: 'POST',
+        body: JSON.stringify({ rates }),
+      });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'فشل حفظ أسعار وإعدادات التوصيل');
       }
+
       setSavedSuccess(true);
       setTimeout(() => setSavedSuccess(false), 3500);
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error saving shipping settings:', err);
-      alert('حدث خطأ أثناء حفظ أسعار وإعدادات التوصيل');
+      alert(err.message || 'حدث خطأ أثناء حفظ أسعار وإعدادات التوصيل');
     } finally {
       setIsSaving(false);
     }

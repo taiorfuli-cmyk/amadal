@@ -21,7 +21,7 @@ export const Footer: React.FC<FooterProps> = ({ onNavigate }) => {
   const currentYear = new Date().getFullYear();
 
   return (
-    <footer className="bg-neutral-950 text-neutral-300 border-t border-neutral-800">
+    <footer className="theme-footer border-t border-neutral-800 transition-colors">
       {/* Trust & Value Highlights */}
       <div className="border-b border-neutral-850 py-10">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">

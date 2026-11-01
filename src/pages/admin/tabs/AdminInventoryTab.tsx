@@ -1,7 +1,6 @@
 import React, { useState } from 'react';
 import { Product, ProductVariant } from '../../../types';
-import { doc, updateDoc } from 'firebase/firestore';
-import { db } from '../../../firebase';
+import { apiFetch } from '../../../utils/apiConfig';
 import { AlertTriangle, CheckCircle, Search, Save, RefreshCw } from 'lucide-react';
 import { useStore } from '../../../context/StoreContext';
 
@@ -54,19 +53,24 @@ export const AdminInventoryTab: React.FC<AdminInventoryTabProps> = ({ products, 
     const key = `${product.id}-${variantIndex}`;
     setUpdatingId(key);
     try {
-      const updatedVariants = [...(product.variants || [])];
-      updatedVariants[variantIndex] = {
-        ...updatedVariants[variantIndex],
-        stock: Math.max(0, newStock),
-      };
-
-      await updateDoc(doc(db, 'products', product.id), {
-        variants: updatedVariants,
+      const res = await apiFetch('/api/admin/inventory/update', {
+        method: 'POST',
+        body: JSON.stringify({
+          productId: product.id,
+          variantIndex,
+          newStock: Math.max(0, newStock),
+        }),
       });
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'حدث خطأ أثناء تحديث المخزون');
+      }
+
       onRefresh();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
-      alert('حدث خطأ أثناء تحديث المخزون');
+      alert(err.message || 'حدث خطأ أثناء تحديث المخزون');
     } finally {
       setUpdatingId(null);
     }

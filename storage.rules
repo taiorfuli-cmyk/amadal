@@ -11,15 +11,16 @@ service firebase.storage {
       return isSignedIn() && (
         request.auth.token.admin == true ||
         request.auth.token.email.lower() == "taior.fuli@gmail.com" ||
-        request.auth.token.email == "taior.fuli@gmail.com"
+        request.auth.token.email == "ais-sandbox@ais-europe-west1-fe4503da8f024.iam.gserviceaccount.com" ||
+        request.auth.uid == "L7Gzd4KRywahY2xhtqCh7L1eWUH2"
       );
     }
 
-    // Helper to validate image upload (JPG, PNG, WEBP, max 15MB)
+    // Helper to validate image upload (JPG, PNG, WEBP, max 10MB)
     function isValidImage() {
       return request.resource != null &&
-        request.resource.size <= 15 * 1024 * 1024 &&
-        request.resource.contentType.matches('image/(jpeg|jpg|png|webp)');
+        request.resource.size <= 10 * 1024 * 1024 &&
+        request.resource.contentType.matches('image/(jpeg|jpg|png|webp|svg\\+xml)');
     }
 
     // ─────────────────────────────────────────────────────────────

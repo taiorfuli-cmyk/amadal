@@ -402,7 +402,11 @@ export async function submitOrderSafely(params: CreateOrderParams): Promise<Orde
 
     if (response.ok) {
       if (data?.success && data?.order) {
-        return data.order as Order;
+        const ord = data.order as Order;
+        if (data.trackingToken && !ord.trackingToken) {
+          ord.trackingToken = data.trackingToken;
+        }
+        return ord;
       }
       if (data?.error) {
         throw new Error(data.error);
@@ -411,9 +415,10 @@ export async function submitOrderSafely(params: CreateOrderParams): Promise<Orde
       if (data?.error) {
         throw new Error(data.error);
       }
+      throw new Error(`خطأ في معالجة الطلب على الخادم (${response.status})`);
     }
   } catch (err: any) {
-    // If it's a validation or stock error explicitly thrown by the server, do not fallback
+    // If it's a validation, stock, coupon, or explicit business error thrown by the server, rethrow immediately
     const errMsg = err?.message || '';
     if (
       errMsg.includes('نفد مخزون') ||
@@ -421,7 +426,14 @@ export async function submitOrderSafely(params: CreateOrderParams): Promise<Orde
       errMsg.includes('الكمية المتبقية') ||
       errMsg.includes('كود الخصم') ||
       errMsg.includes('غير صالح') ||
-      errMsg.includes('يرجى')
+      errMsg.includes('غير متاح') ||
+      errMsg.includes('يرجى') ||
+      errMsg.includes('الاسم') ||
+      errMsg.includes('الهاتف') ||
+      errMsg.includes('الولاية') ||
+      errMsg.includes('البلدية') ||
+      errMsg.includes('العنوان') ||
+      errMsg.includes('خطأ في معالجة الطلب')
     ) {
       throw err;
     }

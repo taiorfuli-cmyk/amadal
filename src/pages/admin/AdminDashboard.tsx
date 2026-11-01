@@ -22,7 +22,8 @@ import {
   KeyRound,
   User,
   RefreshCw,
-  AlertCircle
+  AlertCircle,
+  Palette
 } from 'lucide-react';
 import { Product, Order, Customer, Category, Coupon } from '../../types';
 import { collection, onSnapshot, query, orderBy, getDocs } from 'firebase/firestore';
@@ -43,6 +44,7 @@ import { AdminCouponsTab } from './tabs/AdminCouponsTab';
 import { AdminShippingTab } from './tabs/AdminShippingTab';
 import { AdminHomepageTab } from './tabs/AdminHomepageTab';
 import { AdminSettingsTab } from './tabs/AdminSettingsTab';
+import { AdminColorsTab } from './tabs/AdminColorsTab';
 import { AdminAndersonTab } from './tabs/AdminAndersonTab';
 import { AdminAccountTab } from './tabs/AdminAccountTab';
 
@@ -51,7 +53,7 @@ interface AdminDashboardProps {
 }
 
 export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore }) => {
-  const { currentUser, isAdmin, adminUsername, loginWithCredentials, logout, isLoading: authLoading } = useAuth();
+  const { currentUser, isAdmin, adminUsername, loginWithCredentials, logout, isLoading: authLoading, setupRequired, setupInitialAdmin } = useAuth();
   const { settings, categories, refreshData } = useStore();
 
   const [activeTab, setActiveTab] = useState<string>('overview');
@@ -68,6 +70,14 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
   const [loginError, setLoginError] = useState<string | null>(null);
   const [isLoggingIn, setIsLoggingIn] = useState(false);
 
+  // Initial Admin Setup State (when setupRequired === true)
+  const [setupUser, setSetupUser] = useState('');
+  const [setupPass, setSetupPass] = useState('');
+  const [setupConfirm, setSetupConfirm] = useState('');
+  const [showSetupPass, setShowSetupPass] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const [isSettingUp, setIsSettingUp] = useState(false);
+
   const handleLoginSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoginError(null);
@@ -83,23 +93,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
     }
   };
 
-  // Subscribe to Products
+  const handleSetupSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSetupError(null);
+    if (!setupUser.trim() || setupUser.trim().length < 3) {
+      setSetupError('يجب أن يتكون اسم المستخدم من 3 أحرف على الأقل.');
+      return;
+    }
+    if (!setupPass || setupPass.length < 8) {
+      setSetupError('يجب ألا تقل كلمة المرور عن 8 أحرف أو أرقام وتكون قوية.');
+      return;
+    }
+    if (setupPass !== setupConfirm) {
+      setSetupError('كلمتا المرور غير متطابقتين.');
+      return;
+    }
+    setIsSettingUp(true);
+    const res = await setupInitialAdmin(setupUser.trim(), setupPass, setupConfirm);
+    setIsSettingUp(false);
+    if (!res.success) {
+      setSetupError(res.error || 'فشل إعداد حساب المدير.');
+    }
+  };
+
+  // Subscribe to Products with error handler
   useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'products'), (snapshot) => {
-      const list: Product[] = [];
-      snapshot.forEach((d) => list.push({ ...(d.data() as Product), id: d.id }));
-      setProducts(list);
-    });
+    const unsub = onSnapshot(
+      collection(db, 'products'),
+      (snapshot) => {
+        const list: Product[] = [];
+        snapshot.forEach((d) => list.push({ ...(d.data() as Product), id: d.id }));
+        setProducts(list);
+      },
+      (err) => {
+        console.warn('[AdminDashboard] Products snapshot notice:', err);
+      }
+    );
     return () => unsub();
   }, []);
 
-  // Secure Backend Polling & Fetching for Orders and Customers
+  // Secure Backend Polling & Fetching for Orders, Customers, and Coupons (Protected via apiFetch)
   const fetchOrdersAndCustomers = useCallback(async () => {
     if (!isAdmin) return;
     try {
-      const [ordersRes, custRes] = await Promise.allSettled([
+      const [ordersRes, custRes, couponsRes] = await Promise.allSettled([
         apiFetch('/api/admin/orders'),
-        apiFetch('/api/admin/customers')
+        apiFetch('/api/admin/customers'),
+        apiFetch('/api/admin/coupons'),
       ]);
 
       if (ordersRes.status === 'fulfilled' && ordersRes.value.ok) {
@@ -109,6 +149,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
       if (custRes.status === 'fulfilled' && custRes.value.ok) {
         const data = custRes.value.data;
         if (data && Array.isArray(data.customers)) setCustomers(data.customers);
+      }
+      if (couponsRes.status === 'fulfilled' && couponsRes.value.ok) {
+        const data = couponsRes.value.data;
+        if (data && Array.isArray(data.coupons)) setCoupons(data.coupons);
       }
     } catch (e) {
       console.warn('[AdminDashboard] Secure fetch error:', e);
@@ -123,67 +167,15 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
     }
   }, [isAdmin, fetchOrdersAndCustomers]);
 
-  // Subscribe to Orders (fallback for Firestore real-time when authenticated)
-  useEffect(() => {
-    if (!isAdmin) return;
-    try {
-      const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
-      const unsub = onSnapshot(
-        q,
-        (snapshot) => {
-          const list: Order[] = [];
-          snapshot.forEach((d) => {
-            list.push({ ...(d.data() as Order), id: d.id });
-          });
-          setOrders(list);
-        },
-        () => {
-          // Fallback silently to server-side fetching if Firestore direct listener is restricted
-        }
-      );
-      return () => unsub();
-    } catch {
-      // ignore
-    }
-  }, [isAdmin]);
-
-  // Subscribe to Customers (fallback for Firestore real-time when authenticated)
-  useEffect(() => {
-    if (!isAdmin) return;
-    try {
-      const unsub = onSnapshot(
-        collection(db, 'customers'),
-        (snapshot) => {
-          const list: Customer[] = [];
-          snapshot.forEach((d) => list.push(d.data() as Customer));
-          setCustomers(list);
-        },
-        () => {
-          // Fallback silently to server-side fetching if Firestore direct listener is restricted
-        }
-      );
-      return () => unsub();
-    } catch {
-      // ignore
-    }
-  }, [isAdmin]);
-
-  // Subscribe to Coupons
-  useEffect(() => {
-    const unsub = onSnapshot(collection(db, 'coupons'), (snapshot) => {
-      const list: Coupon[] = [];
-      snapshot.forEach((d) => list.push({ ...(d.data() as Coupon), id: d.id, code: d.data().code || d.id }));
-      setCoupons(list);
-    });
-    return () => unsub();
-  }, []);
-
   const refreshCoupons = useCallback(async () => {
     try {
-      const snap = await getDocs(collection(db, 'coupons'));
-      const list: Coupon[] = [];
-      snap.forEach((d) => list.push({ ...(d.data() as Coupon), id: d.id, code: d.data().code || d.id }));
-      setCoupons(list);
+      const res = await apiFetch('/api/admin/coupons');
+      if (res.ok) {
+        const data = res.data;
+        if (data && Array.isArray(data.coupons)) {
+          setCoupons(data.coupons);
+        }
+      }
     } catch (e) {
       console.warn('refreshCoupons error:', e);
     }
@@ -199,8 +191,157 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
     );
   }
 
-  // Unauthenticated Screen - Strictly Username & Password
+  // Unauthenticated Screen - Either Initial Setup or Username & Password Login
   if (!isAdmin) {
+    if (setupRequired) {
+      return (
+        <div className="min-h-screen bg-neutral-950 flex flex-col justify-center items-center px-4 py-12 text-white">
+          <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-8 sm:p-10 space-y-6 shadow-2xl">
+            <div className="text-center space-y-3">
+              <AmadalLogo variant="light" size="lg" customLogoUrl={settings.logoUrl} className="mx-auto" />
+              <div>
+                <div className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-amber-500/10 text-xs text-amber-400 font-mono mb-2 border border-amber-500/20">
+                  <ShieldCheck className="w-3.5 h-3.5 text-amber-400" />
+                  <span>INITIAL SETUP REQUIRED</span>
+                </div>
+                <h2 className="text-xl font-bold text-white mt-1">إعداد حساب المشرف الأولي</h2>
+                <p className="text-xs text-neutral-400 mt-1">
+                  قم بإنشاء اسم المستخدم وكلمة مرور قوية لتأمين لوحة تحكم المتجر.
+                </p>
+              </div>
+            </div>
+
+            {setupError && (
+              <div className="p-3.5 rounded-xl bg-red-500/10 border border-red-500/20 text-red-400 flex items-start gap-2.5 text-xs animate-in fade-in leading-relaxed">
+                <AlertCircle className="w-4 h-4 shrink-0 text-red-400 mt-0.5" />
+                <div className="flex-1 text-right">
+                  <span className="font-semibold block">{setupError}</span>
+                </div>
+              </div>
+            )}
+
+            <form onSubmit={handleSetupSubmit} className="space-y-4" autoComplete="off">
+              <div className="space-y-1.5 text-right">
+                <label className="block text-xs font-semibold text-neutral-300">
+                  اسم المستخدم الجديد
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-neutral-400">
+                    <User className="w-4 h-4" />
+                  </div>
+                  <input
+                    type="text"
+                    value={setupUser}
+                    onChange={(e) => {
+                      setSetupUser(e.target.value);
+                      if (setupError) setSetupError(null);
+                    }}
+                    placeholder="مثال: amadal_master"
+                    dir="ltr"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck="false"
+                    required
+                    className="w-full pr-10 pl-4 py-3 bg-neutral-950 border border-neutral-800 focus:border-white focus:ring-1 focus:ring-white rounded-xl text-sm font-mono text-white outline-none transition-all placeholder:text-neutral-500"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5 text-right">
+                <label className="block text-xs font-semibold text-neutral-300">
+                  كلمة المرور القوية (8 أحرف على الأقل)
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-neutral-400">
+                    <KeyRound className="w-4 h-4" />
+                  </div>
+                  <input
+                    type={showSetupPass ? 'text' : 'password'}
+                    value={setupPass}
+                    onChange={(e) => {
+                      setSetupPass(e.target.value);
+                      if (setupError) setSetupError(null);
+                    }}
+                    placeholder="••••••••••••"
+                    dir="ltr"
+                    autoComplete="new-password"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck="false"
+                    required
+                    className="w-full pr-10 pl-11 py-3 bg-neutral-950 border border-neutral-800 focus:border-white focus:ring-1 focus:ring-white rounded-xl text-sm font-mono text-white outline-none transition-all placeholder:text-neutral-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowSetupPass(!showSetupPass)}
+                    className="absolute inset-y-0 left-0 pl-3 flex items-center text-neutral-400 hover:text-white transition-colors"
+                  >
+                    {showSetupPass ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+              </div>
+
+              <div className="space-y-1.5 text-right">
+                <label className="block text-xs font-semibold text-neutral-300">
+                  تأكيد كلمة المرور
+                </label>
+                <div className="relative">
+                  <div className="absolute inset-y-0 right-0 pr-3.5 flex items-center pointer-events-none text-neutral-400">
+                    <KeyRound className="w-4 h-4" />
+                  </div>
+                  <input
+                    type={showSetupPass ? 'text' : 'password'}
+                    value={setupConfirm}
+                    onChange={(e) => {
+                      setSetupConfirm(e.target.value);
+                      if (setupError) setSetupError(null);
+                    }}
+                    placeholder="••••••••••••"
+                    dir="ltr"
+                    autoComplete="new-password"
+                    autoCorrect="off"
+                    autoCapitalize="off"
+                    spellCheck="false"
+                    required
+                    className="w-full pr-10 pl-11 py-3 bg-neutral-950 border border-neutral-800 focus:border-white focus:ring-1 focus:ring-white rounded-xl text-sm font-mono text-white outline-none transition-all placeholder:text-neutral-500"
+                  />
+                </div>
+              </div>
+
+              <button
+                type="submit"
+                disabled={isSettingUp}
+                className="w-full py-3.5 px-4 bg-white hover:bg-neutral-100 text-neutral-950 font-bold rounded-xl text-xs flex items-center justify-center gap-2 shadow-lg transition-all disabled:opacity-50 cursor-pointer mt-2"
+              >
+                {isSettingUp ? (
+                  <>
+                    <RefreshCw className="w-4 h-4 animate-spin text-neutral-950" />
+                    <span>جاري تشفير وحفظ بيانات المدير...</span>
+                  </>
+                ) : (
+                  <>
+                    <ShieldCheck className="w-4 h-4" />
+                    <span>إتمام وتأمين الحساب</span>
+                  </>
+                )}
+              </button>
+            </form>
+
+            <div className="pt-4 border-t border-neutral-800/80">
+              <button
+                onClick={onBackToStore}
+                className="text-xs text-neutral-400 hover:text-white flex items-center justify-center gap-1.5 mx-auto transition-colors"
+              >
+                <ArrowRight className="w-3.5 h-3.5" />
+                <span>الرجوع إلى المتجر الإلكتروني</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="min-h-screen bg-neutral-950 flex flex-col justify-center items-center px-4 py-12 text-white">
         <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-3xl p-8 sm:p-10 space-y-6 shadow-2xl">
@@ -227,7 +368,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
             </div>
           )}
 
-          <form onSubmit={handleLoginSubmit} className="space-y-4">
+          <form onSubmit={handleLoginSubmit} className="space-y-4" autoComplete="off">
             <div className="space-y-1.5 text-right">
               <label className="block text-xs font-semibold text-neutral-300">
                 اسم المستخدم
@@ -245,7 +386,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
                   }}
                   placeholder="اسم المستخدم"
                   dir="ltr"
-                  autoComplete="username"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
                   required
                   className="w-full pr-10 pl-4 py-3 bg-neutral-950 border border-neutral-800 focus:border-white focus:ring-1 focus:ring-white rounded-xl text-sm font-mono text-white outline-none transition-all placeholder:text-neutral-500"
                 />
@@ -269,7 +413,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
                   }}
                   placeholder="••••••••"
                   dir="ltr"
-                  autoComplete="current-password"
+                  autoComplete="new-password"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck="false"
                   required
                   className="w-full pr-10 pl-11 py-3 bg-neutral-950 border border-neutral-800 focus:border-white focus:ring-1 focus:ring-white rounded-xl text-sm font-mono text-white outline-none transition-all placeholder:text-neutral-500"
                 />
@@ -332,6 +479,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
       count: orders.filter((o) => o.andersonStatus === 'failed').length,
     },
     { id: 'homepage', label: 'الصفحة الرئيسية', icon: Sliders },
+    { id: 'colors', label: 'تخصيص الألوان', icon: Palette },
     { id: 'settings', label: 'إعدادات المتجر', icon: Settings },
     { id: 'account', label: 'حساب المشرف والأمان', icon: KeyRound },
   ];
@@ -366,7 +514,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
 
           <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-neutral-900 border border-neutral-800 text-xs font-mono text-neutral-300">
             <User className="w-3.5 h-3.5 text-neutral-400" />
-            <span>@{adminUsername || 'admin'}</span>
+            <span>@{adminUsername || 'amadal_admin'}</span>
           </div>
 
           <button
@@ -498,6 +646,8 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({ onBackToStore })
           )}
 
           {activeTab === 'homepage' && <AdminHomepageTab />}
+
+          {activeTab === 'colors' && <AdminColorsTab />}
 
           {activeTab === 'settings' && <AdminSettingsTab />}
 

@@ -209,7 +209,7 @@ function AppContent() {
   const isAdminView = currentView === 'admin';
 
   return (
-    <div className="min-h-screen bg-neutral-50 text-neutral-900 font-sans selection:bg-neutral-900 selection:text-white flex flex-col justify-between">
+    <div className="min-h-screen theme-main-store font-sans selection:bg-neutral-900 selection:text-white flex flex-col justify-between transition-colors">
       
       {/* Top Navigation Bar */}
       {!isAdminView && (

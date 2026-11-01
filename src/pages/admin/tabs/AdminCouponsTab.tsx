@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Coupon } from '../../../types';
 import { doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db, removeUndefinedFields } from '../../../firebase';
+import { apiFetch } from '../../../utils/apiConfig';
 import {
   Plus,
   Trash2,
@@ -85,9 +86,11 @@ export const AdminCouponsTab: React.FC<AdminCouponsTabProps> = ({ coupons, onRef
   const handleToggleActive = async (coupon: Coupon) => {
     try {
       const docId = coupon.code || coupon.id;
-      await updateDoc(doc(db, 'coupons', docId), {
-        isActive: !coupon.isActive,
+      const res = await apiFetch(`/api/admin/coupons/${encodeURIComponent(docId)}`, {
+        method: 'PUT',
+        body: JSON.stringify({ isActive: !coupon.isActive }),
       });
+      if (!res.ok) throw new Error('فشل تحديث حالة الكوبون');
       onRefresh();
     } catch (e: any) {
       console.error('Error toggling coupon status:', e);
@@ -118,19 +121,16 @@ export const AdminCouponsTab: React.FC<AdminCouponsTabProps> = ({ coupons, onRef
         throw new Error('كود الكوبون غير محدد.');
       }
 
-      // 1. Delete primary document from Firestore
-      await deleteDoc(doc(db, 'coupons', docId));
-
-      // 2. If id is different from code, cleanup secondary document
-      if (couponToDelete.id && couponToDelete.id !== docId) {
-        try {
-          await deleteDoc(doc(db, 'coupons', couponToDelete.id));
-        } catch {
-          // secondary delete cleanup ignored
-        }
+      // 1. Delete document via Server API
+      const res = await apiFetch(`/api/admin/coupons/${encodeURIComponent(docId)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'فشل حذف الكوبون.');
       }
 
-      // 3. Close modal, notify user & trigger immediate refresh
+      // 2. Close modal, notify user & trigger immediate refresh
       setCouponToDelete(null);
       setIsDeleting(false);
       showToast(`تم حذف كود الخصم "${couponCode}" بنجاح`);
@@ -138,7 +138,7 @@ export const AdminCouponsTab: React.FC<AdminCouponsTabProps> = ({ coupons, onRef
     } catch (err: any) {
       console.error('[Coupon Delete Error]:', err?.code, err?.message, err);
       setIsDeleting(false);
-      const detail = err?.message || err?.code || 'فشل الاتصال بقاعدة البيانات';
+      const detail = err?.message || err?.code || 'فشل الاتصال بالخادم';
       setDeleteError(`حدث خطأ أثناء حذف الكوبون: ${detail}`);
     }
   };
@@ -196,7 +196,18 @@ export const AdminCouponsTab: React.FC<AdminCouponsTabProps> = ({ coupons, onRef
         isActive: editingCoupon.isActive ?? true,
       };
 
-      await setDoc(doc(db, 'coupons', docId), removeUndefinedFields(payload), { merge: isEditMode });
+      const res = await apiFetch(
+        isEditMode ? `/api/admin/coupons/${encodeURIComponent(docId)}` : '/api/admin/coupons',
+        {
+          method: isEditMode ? 'PUT' : 'POST',
+          body: JSON.stringify(payload),
+        }
+      );
+
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'فشل حفظ الكوبون.');
+      }
 
       setIsEditing(false);
       setEditingCoupon(null);
@@ -204,7 +215,7 @@ export const AdminCouponsTab: React.FC<AdminCouponsTabProps> = ({ coupons, onRef
       onRefresh();
     } catch (err: any) {
       console.error('[Coupon Save Error]:', err?.code, err?.message, err);
-      const detail = err?.message || err?.code || 'فشل حفظ الكوبون في قاعدة البيانات';
+      const detail = err?.message || err?.code || 'فشل حفظ الكوبون في الخادم';
       setSaveError(`حدث خطأ أثناء الحفظ: ${detail}`);
     } finally {
       setIsSaving(false);

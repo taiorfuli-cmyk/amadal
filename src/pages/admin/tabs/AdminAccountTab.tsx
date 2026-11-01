@@ -20,13 +20,13 @@ import { apiFetch } from '../../../utils/apiConfig';
 export const AdminAccountTab: React.FC = () => {
   const { adminUsername, updateCredentials } = useAuth();
 
-  const [currentUsername, setCurrentUsername] = useState<string>(adminUsername || 'admin');
+  const [currentUsername, setCurrentUsername] = useState<string>(adminUsername || 'amadal_admin');
   const [lastUpdatedAt, setLastUpdatedAt] = useState<string | null>(null);
   const [isFetchingStatus, setIsFetchingStatus] = useState<boolean>(true);
 
   // Form Fields
   const [currentPassword, setCurrentPassword] = useState('');
-  const [newUsername, setNewUsername] = useState(adminUsername || 'admin');
+  const [newUsername, setNewUsername] = useState(adminUsername || 'amadal_admin');
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
 

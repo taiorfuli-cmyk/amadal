@@ -32,19 +32,47 @@ export interface ApiFetchOptions extends RequestInit {
   skipAuth?: boolean;
 }
 
+const CSRF_STORAGE_KEY = 'amadal_csrf_token';
+
+export function getCsrfToken(): string | null {
+  if (typeof document !== 'undefined') {
+    const match = document.cookie.match(/(?:^|;\s*)amadal_csrf_token=([^;]+)/);
+    if (match) return decodeURIComponent(match[1]);
+    return localStorage.getItem(CSRF_STORAGE_KEY);
+  }
+  return null;
+}
+
+export function setCsrfToken(token: string): void {
+  if (typeof window !== 'undefined' && token) {
+    localStorage.setItem(CSRF_STORAGE_KEY, token);
+  }
+}
+
 /**
  * Enhanced fetch wrapper with:
  * - Dynamic relative or absolute base URL
  * - credentials: 'include' for cross-site cookie and session support
  * - Automatic Authorization header injection
+ * - Automatic CSRF Protection header injection
  * - Comprehensive error parsing with detailed Arabic error messages
  */
+export interface ApiFetchResponse<T = any> {
+  ok: boolean;
+  status: number;
+  data?: T | null;
+  error?: string;
+  json: () => Promise<any>;
+  text: () => Promise<string>;
+}
+
 export async function apiFetch<T = any>(
   endpoint: string,
   options: ApiFetchOptions = {}
-): Promise<{ ok: boolean; status: number; data?: T | null; error?: string }> {
+): Promise<ApiFetchResponse<T>> {
   const url = getApiUrl(endpoint);
   const token = typeof window !== 'undefined' ? localStorage.getItem(TOKEN_STORAGE_KEY) : null;
+  const csrf = getCsrfToken();
 
   const headers = new Headers(options.headers || {});
   if (!headers.has('Content-Type') && !(options.body instanceof FormData)) {
@@ -57,6 +85,12 @@ export async function apiFetch<T = any>(
   if (token && !options.skipAuth && !headers.has('Authorization')) {
     headers.set('Authorization', `Bearer ${token}`);
     headers.set('X-Admin-Token', token);
+  }
+
+  // Inject CSRF protection token on state-changing requests
+  const method = (options.method || 'GET').toUpperCase();
+  if (csrf && !headers.has('X-CSRF-Token') && ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    headers.set('X-CSRF-Token', csrf);
   }
 
   try {
@@ -98,7 +132,14 @@ export async function apiFetch<T = any>(
       }
 
       console.warn(`[apiFetch Error] ${options.method || 'GET'} ${url} returned ${res.status}:`, detailedError);
-      return { ok: false, status: res.status, data, error: detailedError };
+      return {
+        ok: false,
+        status: res.status,
+        data,
+        error: detailedError,
+        json: async () => data,
+        text: async () => rawText,
+      };
     }
 
     if (!isJson) {
@@ -108,20 +149,31 @@ export async function apiFetch<T = any>(
         status: res.status,
         data: null,
         error: 'استجاب الخادم بصفحة ويب HTML بدلاً من استجابة JSON برمجية.',
+        json: async () => null,
+        text: async () => rawText,
       };
     }
 
-    return { ok: true, status: res.status, data };
+    if (data?.csrfToken && typeof data.csrfToken === 'string') {
+      setCsrfToken(data.csrfToken);
+    }
+
+    return {
+      ok: true,
+      status: res.status,
+      data,
+      json: async () => data,
+      text: async () => rawText,
+    };
   } catch (err: any) {
     console.error(`[apiFetch Network Failure] ${options.method || 'GET'} ${url}:`, err);
-    let msg = err.message || 'تعذر الاتصال بالخادم';
-    if (msg.includes('Failed to fetch') || msg.includes('NetworkError') || msg.includes('Load failed')) {
-      msg = 'تعذر الاتصال بالخادم. يرجى التحقق من اتصال الإنترنت، أو قيود CORS على الرابط المباشر.';
-    }
     return {
       ok: false,
       status: 0,
-      error: msg,
+      data: null,
+      error: 'تعذر الاتصال بالخادم. يرجى التحقق من اتصالك بالإنترنت.',
+      json: async () => null,
+      text: async () => '',
     };
   }
 }

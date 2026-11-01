@@ -7,3 +7,9 @@ coverage/
 .env*
 !.env.example
 bun.lock*
+.admin_credentials.json
+.media_cache/
+*service-account*.json
+*credentials*.json
+!server-admin-auth.json
+serviceAccountKey.json

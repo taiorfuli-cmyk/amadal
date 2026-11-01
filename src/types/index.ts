@@ -134,6 +134,7 @@ export interface Order {
   discount: number;
   couponCode?: string;
   total: number;
+  trackingToken?: string;
 
   // 1. حالة طلب AMADAL المستقلة
   status: OrderStatus;
@@ -217,6 +218,52 @@ export interface Coupon {
   isActive: boolean;
 }
 
+export interface ElementColorConfig {
+  textColor: string;
+  bgColor: string;
+}
+
+export interface StoreThemeColors {
+  // 1. العناصر العامة (General Elements)
+  mainStore: ElementColorConfig;
+  homepage: ElementColorConfig;
+  header: ElementColorConfig;
+  footer: ElementColorConfig;
+  navbar: ElementColorConfig;
+
+  // 2. عناصر المنتجات (Product Elements)
+  productCard: ElementColorConfig;
+  productName: ElementColorConfig;
+  productPrice: ElementColorConfig;
+  productsSection: ElementColorConfig;
+  productModal: ElementColorConfig;
+
+  // 3. التصنيفات (Categories)
+  categoryCard: ElementColorConfig;
+  categoryName: ElementColorConfig;
+  categoriesSection: ElementColorConfig;
+
+  // 4. الأزرار (Buttons)
+  buttonsGeneral: ElementColorConfig;
+  btnBuyNow: ElementColorConfig;
+  btnAddToCart: ElementColorConfig;
+  btnConfirmOrder: ElementColorConfig;
+  btnContinueShopping: ElementColorConfig;
+  btnActions: ElementColorConfig;
+
+  // 5. سلة التسوق والطلبات (Cart & Orders)
+  cartDrawer: ElementColorConfig;
+  checkoutPage: ElementColorConfig;
+  customerInputs: ElementColorConfig;
+  orderSummary: ElementColorConfig;
+
+  // 6. النوافذ الإضافية (Modals & Alerts)
+  modals: ElementColorConfig;
+  alerts: ElementColorConfig;
+  confirmModals: ElementColorConfig;
+  statusBanners: ElementColorConfig;
+}
+
 export interface StoreSettings {
   storeName: string;
   storeDescription: string;
@@ -235,6 +282,7 @@ export interface StoreSettings {
   orderArchiveDurationHours?: number;
   announcementText: string;
   showAnnouncement: boolean;
+  themeColors?: StoreThemeColors;
 }
 
 export interface HomepageConfig {

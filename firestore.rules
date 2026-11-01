@@ -51,17 +51,12 @@ service cloud.firestore {
 
     // ─────────────────────────────────────────────────────────────
     // 2. Products Collection
-    // Public read. Create, delete strictly admin.
-    // Update allows admin, or safe inventory stock decrement on checkout.
+    // Public read. Create, update, delete strictly admin and server service account.
+    // Untrusted clients cannot modify prices, stock, or variants directly.
     // ─────────────────────────────────────────────────────────────
     match /products/{productId} {
       allow read: if true;
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || (
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['variants', 'updatedAt'])
-        && request.resource.data.price == resource.data.price
-        && request.resource.data.name == resource.data.name
-      );
+      allow write: if isAdmin();
     }
 
     // ─────────────────────────────────────────────────────────────
@@ -74,39 +69,32 @@ service cloud.firestore {
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 4. Coupons Collection
-    // Public read. Create, delete strictly admin.
-    // Update allowed for admin, or usageCount increment on order completion.
+    // 4. Coupons Collection (Marketing & Discount Protection)
+    // Direct client access is strictly forbidden.
+    // Coupon validation and usage calculations are handled exclusively by the server.
     // ─────────────────────────────────────────────────────────────
     match /coupons/{couponId} {
-      allow read: if true;
-      allow create, delete: if isAdmin();
-      allow update: if isAdmin() || (
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['usageCount'])
-      );
+      allow read, write: if isAdmin();
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 5. Orders Collection
-    // Customers can ONLY create with valid schema.
-    // Modification, deletion, and bulk listing are strictly forbidden for public.
-    // Only Admin can list all orders or update/delete orders.
+    // 5. Orders Collection (Customer & Financial Privacy Hardened)
+    // Direct client read, list, update, and delete are strictly forbidden for public.
+    // Prevents unauthorized visitors from reading order documents or customer PII.
+    // Only authenticated admin and server service account have direct access.
+    // Safe order tracking is provided via the server /api/orders/track API.
     // ─────────────────────────────────────────────────────────────
     match /orders/{orderId} {
-      allow create: if isValidOrderCreate();
-      allow get: if true;
-      allow list: if isAdmin();
-      allow update, delete: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
     // ─────────────────────────────────────────────────────────────
-    // 6. Customers Collection
-    // Public can ONLY create on checkout.
-    // Listing, reading, updating, and deleting customer profiles strictly admin.
+    // 6. Customers Collection (Profile & Identity Protection)
+    // Direct client access is strictly forbidden.
+    // Customer profile records are managed exclusively by the server transaction.
     // ─────────────────────────────────────────────────────────────
     match /customers/{customerId} {
-      allow create: if true;
-      allow get, list, update, delete: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
     // ─────────────────────────────────────────────────────────────

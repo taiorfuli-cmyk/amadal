@@ -22,6 +22,7 @@ import {
 import { Product, ProductVariant, Category, ProductImage, SizeMeasurement } from '../../../types';
 import { doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { db, removeUndefinedFields } from '../../../firebase';
+import { apiFetch } from '../../../utils/apiConfig';
 import { useStore } from '../../../context/StoreContext';
 import { DEFAULT_SIZE_GUIDE } from '../../../components/SizeGuideModal';
 import {
@@ -138,10 +139,14 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
             r.sleeve.length > 0
         );
 
-      await updateDoc(doc(db, 'products', sizeGuideProduct.id), {
-        sizeGuide: cleanRows,
-        updatedAt: new Date().toISOString(),
+      const res = await apiFetch(`/api/admin/products/${sizeGuideProduct.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ sizeGuide: cleanRows }),
       });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'تعذر حفظ جدول المقاسات.');
+      }
 
       showToast('تم حفظ جدول المقاسات بنجاح');
       onRefresh();
@@ -278,9 +283,11 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
 
   const handleTogglePublish = async (product: Product) => {
     try {
-      await updateDoc(doc(db, 'products', product.id), {
-        isPublished: !product.isPublished,
+      const res = await apiFetch(`/api/admin/products/${product.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ isPublished: !product.isPublished }),
       });
+      if (!res.ok) throw new Error('فشل تغيير حالة النشر');
       onRefresh();
     } catch (e) {
       console.error('Error toggling publish:', e);
@@ -289,9 +296,11 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
 
   const handleToggleFeatured = async (product: Product) => {
     try {
-      await updateDoc(doc(db, 'products', product.id), {
-        isFeatured: !product.isFeatured,
+      const res = await apiFetch(`/api/admin/products/${product.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ isFeatured: !product.isFeatured }),
       });
+      if (!res.ok) throw new Error('فشل تغيير حالة التمييز');
       onRefresh();
     } catch (e) {
       console.error('Error toggling featured:', e);
@@ -333,8 +342,14 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
         } catch {}
       }
 
-      // 2. Delete document from Firestore
-      await deleteDoc(doc(db, 'products', productToDelete.id));
+      // 2. Delete document via Server API
+      const res = await apiFetch(`/api/admin/products/${productToDelete.id}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'تعذر حذف المنتج.');
+      }
 
       // 3. Close dialog & notify
       setProductToDelete(null);
@@ -342,9 +357,9 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
       showToast('تم حذف المنتج بنجاح');
       onRefresh();
     } catch (err: any) {
-      console.error('Failed to delete product from Firestore:', err);
+      console.error('Failed to delete product from server:', err);
       setIsDeleting(false);
-      setDeleteError('تعذر حذف المنتج، حاول مرة أخرى.');
+      setDeleteError(err?.message || 'تعذر حذف المنتج، حاول مرة أخرى.');
     }
   };
 
@@ -713,7 +728,17 @@ export const AdminProductsTab: React.FC<AdminProductsTabProps> = ({
       }
 
       const cleanPayload = removeUndefinedFields(payload) as Product;
-      await setDoc(doc(db, 'products', prodId), cleanPayload);
+      const res = await apiFetch(
+        existingProduct ? `/api/admin/products/${prodId}` : '/api/admin/products',
+        {
+          method: existingProduct ? 'PUT' : 'POST',
+          body: JSON.stringify(cleanPayload),
+        }
+      );
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || 'فشل حفظ المنتج.');
+      }
       setIsEditing(false);
       setEditingProduct(null);
       showToast('تم حفظ المنتج بنجاح');
